@@ -403,6 +403,25 @@ func loadConfigFile(filename string) {
 		log.Fatalf("Missing RPC URL in config file %v", filename)
 	}
 
+	if v, ok := configOptions["nats"]; ok {
+		var natsConfig shared.NatsConfig
+
+		// First, convert the map value to JSON bytes
+		jsonBytes, err := json.Marshal(v)
+		if err != nil {
+			log.Fatalf("failed to marshal NATS config: %v", err)
+		}
+
+		// Then unmarshal the JSON bytes into the natsConfig struct
+		if err := json.Unmarshal(jsonBytes, &natsConfig); err != nil {
+			log.Fatalf("failed to unmarshal NATS config: %v", err)
+		}
+
+		if err := shared.InitNATS(&natsConfig); err != nil {
+			log.Fatalf("Failed to initialize NATS: %v", err)
+		}
+	}
+
 	// load actions
 	// init maps
 	options.AddressProperties = make(map[common.Address]map[string]interface{})
