@@ -12,11 +12,11 @@ import (
 
 const (
 	AssetNative             = "native"
-	ChainID                 = "eip155:1"
+	ChainID                 = "eip155:11155111"
 	EventTypeTransaction    = "unified_confirmed_tx"
 	EventTypeTransactionLog = "unified_confirmed_tx_log"
 	EventTypeBalance        = "unified_confirmed_balance"
-	NetworkHolesky          = "mainnet"
+	Network                 = "sepolia"
 	ProtocolEthereum        = "ethereum"
 	StatusSuccess           = "success"
 )
@@ -45,7 +45,7 @@ func (txData *ActionTxData) toBalance(address *common.Address, balance *big.Int)
 		ChainId:   ChainID,
 		Data:      balanceData,
 		EventType: EventTypeBalance,
-		Network:   NetworkHolesky,
+		Network:   Network,
 		Protocol:  ProtocolEthereum,
 	}
 }
@@ -113,7 +113,7 @@ func (txData *ActionTxData) ConvertToWebhookTxData() webhook.WebhookMessageUnifi
 			TxId:        txHash,
 		},
 		EventType: EventTypeTransaction,
-		Network:   NetworkHolesky,
+		Network:   Network,
 		Protocol:  ProtocolEthereum,
 	}
 }
@@ -159,7 +159,7 @@ func (eventData *ActionEventData) ConvertToWebhookLogData() webhook.WebhookMessa
 			TxId:        txHash,
 		},
 		EventType: EventTypeTransactionLog,
-		Network:   NetworkHolesky,
+		Network:   Network,
 		Protocol:  ProtocolEthereum,
 	}
 }
@@ -199,7 +199,7 @@ func (eventData *ActionEventData) toBalance(address *common.Address, balance *bi
 		ChainId:   ChainID,
 		Data:      balanceData,
 		EventType: EventTypeBalance,
-		Network:   NetworkHolesky,
+		Network:   Network,
 		Protocol:  ProtocolEthereum,
 	}
 }

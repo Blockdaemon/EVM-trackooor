@@ -4,43 +4,40 @@ import (
 	"context"
 	"log/slog"
 	"math/big"
+	"os"
 	"time"
 
 	"github.com/Zellic/EVM-trackooor/shared"
 	"github.com/Zellic/EVM-trackooor/utils"
-	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/ethereum/go-ethereum/common"
 )
 
-var monitoredAddresses = mapset.NewSet[common.Address]()
-
 func (p action) InitMonitorTransfers() {
+	shared.SetAddressAddedCallback(
+		func(addr common.Address) {
+			addTxAddressAction(addr, handleAddressTx)
+		},
+	)
+
 	// monitor addresses for transactions
 	for _, address := range p.o.Addresses {
-		monitoredAddresses.Add(address)
-		addTxAddressAction(address, handleAddressTx)
+		if err := shared.AddMonitoredAddress(address); err != nil {
+			slog.Error("failed to add monitored address", "address", address, "error", err)
+			os.Exit(1) // TODO: Bad!
+		}
 	}
 
 	// monitor erc20 token for transfer events
-	for _, addrInterface := range p.o.CustomOptions["erc20-tokens"].([]any) {
-		erc20TokenAddress := common.HexToAddress(addrInterface.(string))
+	erc20TokenAddresses := p.o.CustomOptions["erc20-tokens"].([]any)
+	for _, erc20TokenAddress := range erc20TokenAddresses {
+		erc20TokenAddressString := erc20TokenAddress.(string)
+
 		addAddressEventSigAction(
-			erc20TokenAddress,
+			common.HexToAddress(erc20TokenAddressString),
 			"Transfer(address,address,uint256)",
 			handleTokenTransfer,
 		)
 	}
-
-	// monitor addresses for transfer events
-	addressChannel := make(chan common.Address)
-	go shared.SubscribeToAddressEvents(context.Background(), addressChannel)
-	go func() {
-		for address := range addressChannel {
-			monitoredAddresses.Add(address)
-			addTxAddressAction(address, handleAddressTx)
-		}
-	}()
-
 }
 
 // called when a tx is from/to monitored address
@@ -50,9 +47,13 @@ func handleAddressTx(p ActionTxData) {
 		to              = *p.To
 		value           = p.Transaction.Value()
 		webhookData     = p.ConvertToWebhookTxData()
-		isFromMonitored = monitoredAddresses.Contains(from)
-		isToMonitored   = monitoredAddresses.Contains(to)
+		isFromMonitored = shared.MonitoredAddressesContain(from)
+		isToMonitored   = shared.MonitoredAddressesContain(to)
 	)
+
+	if !isFromMonitored && !isToMonitored {
+		return
+	}
 
 	if value.Cmp(big.NewInt(0)) == 0 {
 		return
@@ -114,17 +115,24 @@ func handleTokenTransfer(p ActionEventData) {
 		from            = p.DecodedTopics["from"].(common.Address)
 		to              = p.DecodedTopics["to"].(common.Address)
 		value           = p.DecodedData["value"].(*big.Int)
-		isFromMonitored = monitoredAddresses.Contains(from)
-		isToMonitored   = monitoredAddresses.Contains(to)
 		token           = p.EventLog.Address
-		tokenInfo       = shared.RetrieveERC20Info(token)
-		decimals        = tokenInfo.Decimals
-		symbol          = tokenInfo.Symbol
+		isFromMonitored = shared.MonitoredAddressesContain(from)
+		isToMonitored   = shared.MonitoredAddressesContain(to)
 	)
+
+	if !isFromMonitored && !isToMonitored {
+		return
+	}
 
 	if value.Cmp(big.NewInt(0)) == 0 {
 		return
 	}
+
+	var (
+		tokenInfo = shared.RetrieveERC20Info(token)
+		decimals  = tokenInfo.Decimals
+		symbol    = tokenInfo.Symbol
+	)
 
 	// Convert to transfer webhook format and publish
 	webhookData := p.ConvertToWebhookLogData()

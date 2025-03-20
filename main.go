@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -436,7 +437,7 @@ func loadConfigFile(filename string) {
 			log.Fatalf("failed to unmarshal NATS config: %v", err)
 		}
 
-		if err := shared.InitNATS(&natsConfig); err != nil {
+		if err := shared.InitNATS(context.TODO(), &natsConfig); err != nil { // FIXME
 			log.Fatalf("Failed to initialize NATS: %v", err)
 		}
 	}
