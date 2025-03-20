@@ -30,7 +30,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o evm-trackooor
 FROM alpine:latest
 
 # Install ca-certificates for HTTPS requests
-RUN apk --no-cache add ca-certificates
+RUN apk --no-cache add ca-certificates curl
 
 WORKDIR /app
 
@@ -44,8 +44,11 @@ COPY --from=builder /app/evm-trackooor .
 # COPY config.json .
 # COPY data/ /app/data/
 
+# Expose health check port (default to 8080, can be overridden)
+EXPOSE 8080
+
 # Set the binary as the entrypoint
 ENTRYPOINT ["./evm-trackooor"]
 
 # Default command (can be overridden)
-CMD ["track", "realtime", "--config", "./config.json", "--verbose"]
+CMD ["track", "realtime", "--config", "./config.json", "--verbose", "--health-port", "8080"]

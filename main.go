@@ -29,6 +29,7 @@ import (
 
 // general
 var verbose bool
+var healthCheckPort string // Port for the health check HTTP server
 
 // trackooors
 var configFilepath string // path to config file instead of specifying params on command line
@@ -81,6 +82,12 @@ var realtimeCmd = &cobra.Command{
 		trackooor.SetupListener(options)
 		actions.InitActions(options.Actions)
 
+		// Start health check server if port is specified
+		if healthCheckPort != "" {
+			healthServer := utils.NewHealthServer(healthCheckPort)
+			healthServer.Start()
+		}
+
 		if shared.BlockTrackingRequired {
 			trackooor.ListenToBlocks()
 		} else {
@@ -104,6 +111,12 @@ var realtimeEventsCmd = &cobra.Command{
 
 		actions.InitActions(options.Actions)
 
+		// Start health check server if port is specified
+		if healthCheckPort != "" {
+			healthServer := utils.NewHealthServer(healthCheckPort)
+			healthServer.Start()
+		}
+
 		trackooor.ListenToEventsSingle()
 	},
 }
@@ -122,6 +135,12 @@ var realtimeBlocksCmd = &cobra.Command{
 		trackooor.SetupListener(options)
 
 		actions.InitActions(options.Actions)
+
+		// Start health check server if port is specified
+		if healthCheckPort != "" {
+			healthServer := utils.NewHealthServer(healthCheckPort)
+			healthServer.Start()
+		}
 
 		if PendingBlocks {
 			trackooor.ListenToPendingBlocks()
@@ -567,6 +586,9 @@ func init() {
 
 	// listening to pending (unconfirmed) blocks
 	realtimeBlocksCmd.PersistentFlags().BoolVar(&PendingBlocks, "pending-blocks", false, "Whether or not to listen for pending (unconfirmed) blocks")
+
+	// Add health check port flag to root command so it's available to all subcommands
+	rootCmd.PersistentFlags().StringVar(&healthCheckPort, "health-port", "", "Port for the health check HTTP server (e.g. 8080)")
 
 	// root cmd structure
 	// root

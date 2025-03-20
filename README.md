@@ -23,6 +23,7 @@ A modular tool to track and process anything on an EVM chain, including events, 
 # Examples
 
 - Logging events from specific contracts, transactions from specific addresses, and blocks mined, either in realtime or historically
+
 <p align="center">
 <img src="./docs/imgs/logging.png" width="90%" style=""/>
 </p>
@@ -30,21 +31,25 @@ A modular tool to track and process anything on an EVM chain, including events, 
 - Scanning for contracts deployed by deployment transactions, for specific bytecodes
 
 - Tracking the volume of uniswap v2 & v3 pools, alerting via Discord webhook when there is a significant percentage change
+
 <p align="center">
 <img src="./docs/imgs/discord_uniswap.png" width="80%" style=""/>
 </p>
 
 - Monitoring for ownership transfers and proxy upgrades
+
 <p align="center">
 <img src="./docs/imgs/ownership_transfer_proxy_upgrade_example.png" width="80%" style=""/>
 </p>
 
 - Tracking the common exploit pattern of withdrawing from Tornado.Cash then deploying a contract
+
 <p align="center">
 <img src="./docs/imgs/discord_tornado.png" width="80%" style=""/>
 </p>
 
 - Graphing funding paths, for both native ETH and ERC20 tokens to visualize transfers of funds
+
 <p align="center">
 <img src="./docs/imgs/graph.png" width="90%" style=""/>
 </p>
@@ -55,6 +60,7 @@ Usage:
 `go run main.go track <realtime|historical> --config <path to config>`
 
 List [actions](#actions): `go run main.go actions`
+
 - More specific info about an action: `go run main.go actions <search_term>`
 
 ## More details
@@ -73,7 +79,6 @@ There is also an option for requesting **historical** data across a block range,
 
 All events, txs and blocks will be sent to **actions**, which are specified in the config file.
 
-
 Examples:
 
 - Track a specific contract, logging any transactions to that contract
@@ -82,7 +87,6 @@ Examples:
 - Loop through blocks 1337 to 2000
   - `go run main.go track historical blocks --config ./config.json --from-block 1337 --to-block 2000`
   - You can also loop backwards (2000 to 1337) by setting `--from-block 2000 --to-block 1337`
-
 
 ## Config file
 
@@ -164,9 +168,10 @@ The example config below logs info for `0xA0b8...` using the `Logging` action, a
 ```
 
 There are also options specific to events. You shouldn't need to use these, unless you need to filter by events and it has to be fast. Both of these are optional.
+
 - `"event-signatures"` - List of event signatures (unhashed) to filter by
   - Example: `"event-signatures":["Stored(uint256)", Retrieved(uint256)]`
-- `"event-topics"` - Nested list of event topics to filter by. [This](https://pkg.go.dev/github.com/ethereum/go-ethereum@v1.14.3#FilterQuery) explains it better. Event signatures provided from `"event-signatures"` are aggregated with this and placed in the first index as topic 0. 
+- `"event-topics"` - Nested list of event topics to filter by. [This](https://pkg.go.dev/github.com/ethereum/go-ethereum@v1.14.3#FilterQuery) explains it better. Event signatures provided from `"event-signatures"` are aggregated with this and placed in the first index as topic 0.
   - Example: `[[],["0x0000000000000000000000000000000000000000000000000000000000000539"]]`
 
 # Actions
@@ -199,15 +204,15 @@ The `action` type struct contains action options, which include addresses, event
 
 ```go
 type action struct {
-	o shared.ActionOptions
+ o shared.ActionOptions
 }
 ```
 
 ```go
 type ActionOptions struct {
-	Addresses     []common.Address       // addresses specific to each action
-	EventSigs     []common.Hash          // event sigs specific to each action
-	CustomOptions map[string]interface{} // custom options specific to each action
+ Addresses     []common.Address       // addresses specific to each action
+ EventSigs     []common.Hash          // event sigs specific to each action
+ CustomOptions map[string]interface{} // custom options specific to each action
 }
 ```
 
@@ -223,8 +228,8 @@ For example, if you wish to call `logTx()` when transactions are receieved from 
 func (p action) InitLogging() {
     ...
     for _, address := range p.o.Addresses {
-		addTxAddressAction(address, logTransaction)
-	}
+  addTxAddressAction(address, logTransaction)
+ }
     ...
 }
 ```
@@ -248,21 +253,21 @@ They can take either event, transaction or block data:
 
 ```go
 type ActionEventData struct {
-	EventLog      types.Log
-	EventFields   shared.EventFields
-	DecodedTopics map[string]interface{}
-	DecodedData   map[string]interface{}
+ EventLog      types.Log
+ EventFields   shared.EventFields
+ DecodedTopics map[string]interface{}
+ DecodedData   map[string]interface{}
 }
 
 type ActionTxData struct {
-	Transaction *types.Transaction
-	From        *common.Address
-	To          *common.Address
-	Block       *types.Block // block which the tx was in
+ Transaction *types.Transaction
+ From        *common.Address
+ To          *common.Address
+ Block       *types.Block // block which the tx was in
 }
 
 type ActionBlockData struct {
-	Block *types.Block
+ Block *types.Block
 }
 ```
 
@@ -270,20 +275,20 @@ For example, checking a transaction calldata takes transaction data, thus `Actio
 
 ```go
 func checkFunctionCall(p ActionTxData) {
-	// continue only if tx was contract interaction
-	txType := shared.DetermineTxType(p.Transaction, p.Block.Number())
-	if txType != shared.ContractTx {
-		return
-	}
+ // continue only if tx was contract interaction
+ txType := shared.DetermineTxType(p.Transaction, p.Block.Number())
+ if txType != shared.ContractTx {
+  return
+ }
 
-	// get tx To and From
-	to := p.To
-	from := p.From
+ // get tx To and From
+ to := p.To
+ from := p.From
 
-	// get tx calldata
-	txData := p.Transaction.Data()
-	// get tx func selector
-	txFuncSig := txData[:4]
+ // get tx calldata
+ txData := p.Transaction.Data()
+ // get tx func selector
+ txFuncSig := txData[:4]
     ...
 }
 ```
@@ -298,10 +303,10 @@ For example, processing a ERC20 transfer event:
 
 ```go
 func ProcessERC20Transfer(p ActionEventData) {
-	tokenAddress := p.EventLog.Address
-	from := p.DecodedTopics["from"].(common.Address)
-	to := p.DecodedTopics["to"].(common.Address)
-	value := p.DecodedData["value"].(*big.Int)
+ tokenAddress := p.EventLog.Address
+ from := p.DecodedTopics["from"].(common.Address)
+ to := p.DecodedTopics["to"].(common.Address)
+ value := p.DecodedData["value"].(*big.Int)
     ...
 }
 ```
@@ -323,13 +328,13 @@ Example for the `TornadoCash` action:
 ```go
 // function called after historical processor is finished
 func (p action) FinishedTornadoCash() {
-	// wait for async funcs to finish
-	RpcWaitGroup.Wait()
+ // wait for async funcs to finish
+ RpcWaitGroup.Wait()
     ...
-	err := os.WriteFile(outputFilepath, writeData, 0644)
-	if err != nil {
-		panic(err)
-	}
+ err := os.WriteFile(outputFilepath, writeData, 0644)
+ if err != nil {
+  panic(err)
+ }
 }
 ```
 
@@ -343,22 +348,22 @@ For example:
 
 ```go
 func (actionInfo) InfoTrackTornadoFundDeploy() actionInfo {
-	name := "TrackTornadoFundDeploy"
-	overview := "Tracks Tornado.cash withdrawers and ether transfers by withdrawers. " +
-		"Alerts if tracked address deploys a contract."
+ name := "TrackTornadoFundDeploy"
+ overview := "Tracks Tornado.cash withdrawers and ether transfers by withdrawers. " +
+  "Alerts if tracked address deploys a contract."
 
-	description := "This is done by listening to withdraw events of all Tornado.cash contracts, " +
-		"and adding the withdraw `to` field to tracked addresses. " +
-		"Ether transfers from tracked addresses will add the ether recipient to tracked addresses. " +
-		"Any subsequent contract deployments will alert in the webhook and terminal."
+ description := "This is done by listening to withdraw events of all Tornado.cash contracts, " +
+  "and adding the withdraw `to` field to tracked addresses. " +
+  "Ether transfers from tracked addresses will add the ether recipient to tracked addresses. " +
+  "Any subsequent contract deployments will alert in the webhook and terminal."
 
-	options := `"data-filepath" - path to save data to
+ options := `"data-filepath" - path to save data to
 "webhook-url" - Discord webhook URL for alerts
 "eth-transfer-threshold" - Min amount of eth transfers to an address for it to be tracked, units in wei
 "max-eth-transfer-depth" - Maximum depth to keep tracking eth transfers
 "data-retention-period" - Will only consider data in the last X hours. Note that data won't be deleted, but only deployments that had a funding path less than this time will be logged`
 
-	example := `"TrackTornadoFundDeploy": {
+ example := `"TrackTornadoFundDeploy": {
     "addresses": {
         "0x12D66f87A04A9E220743712cE6d9bB1B5616B8Fc": {"name": "Tornado.Cash 0.1 ETH"},
     },
@@ -371,17 +376,17 @@ func (actionInfo) InfoTrackTornadoFundDeploy() actionInfo {
     }
 }`
 
-	return actionInfo{
-		ActionName:          name,
-		ActionOverview:      overview,
-		ActionDescription:   description,
-		ActionOptionDetails: options,
-		ActionConfigExample: example,
-	}
+ return actionInfo{
+  ActionName:          name,
+  ActionOverview:      overview,
+  ActionDescription:   description,
+  ActionOptionDetails: options,
+  ActionConfigExample: example,
+ }
 }
 ```
 
-The action name and overview will be displayed when running `actions`, and all other detail displayed when running `actions <search_term>` such as `actions tornado`. 
+The action name and overview will be displayed when running `actions`, and all other detail displayed when running `actions <search_term>` such as `actions tornado`.
 
 ### Additional Info
 
@@ -391,13 +396,13 @@ For example, the BytecodeScan action retrieves a contract's code using `shared.C
 
 ```go
 func blockMined(p ActionBlockData) {
-	block := p.Block
-	for _, tx := range block.Transactions() {
-		  ...
-			deployedContract, _ := shared.GetDeployedContractAddress(tx)
-			contractCode, err := shared.Client.CodeAt(context.Background(), deployedContract, block.Number())
-			...
-	}
+ block := p.Block
+ for _, tx := range block.Transactions() {
+    ...
+   deployedContract, _ := shared.GetDeployedContractAddress(tx)
+   contractCode, err := shared.Client.CodeAt(context.Background(), deployedContract, block.Number())
+   ...
+ }
 }
 ```
 
@@ -413,6 +418,7 @@ It also contains function signatures, although this is not needed normally, some
 
 - Contains event signature hashes, mapped to the event's name, signature and ABI. The event ABI is crucial for decoding the event fields.
 - Most of the time you don't need to add this manually. See flag `--fetch-abi`
+
 <details>
 <summary>Example for ERC20 Transfer event</summary>
 
@@ -503,3 +509,19 @@ For L2 chains that aren't exactly "EVM compatible", for example having invalid s
 # Contributions and Support
 
 Feel free to contribute! Any questions / bugs, please create an issue, or message/ping me (`thesavageteddy`) on Discord.
+
+## Health Checks for Kubernetes
+
+EVM-trackooor now includes built-in health check endpoints for Kubernetes deployments. To enable the health check server, use the `--health-port` flag:
+
+```bash
+./evm-trackooor track realtime --config ./config.json --verbose --health-port 8080
+```
+
+This starts a HTTP server on the specified port with the following endpoints:
+
+- `/healthz` - General health check
+- `/livez` - Kubernetes liveness probe
+- `/readyz` - Kubernetes readiness probe (checks RPC connection)
+
+For more details on deploying to Kubernetes, see the [Kubernetes Deployment Guide](docs/kubernetes.md).
