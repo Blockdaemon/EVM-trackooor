@@ -42,7 +42,7 @@ COPY --from=builder /app/evm-trackooor .
 
 # Copy config and data files
 # COPY config.json .
-# COPY data/ /app/data/
+COPY data/ /app/data/
 
 # Expose health check port (default to 8080, can be overridden)
 EXPOSE 8080
