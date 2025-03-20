@@ -51,4 +51,4 @@ EXPOSE 8080
 ENTRYPOINT ["./evm-trackooor"]
 
 # Default command (can be overridden)
-CMD ["track", "realtime", "--config", "./config.json", "--verbose", "--health-port", "8080"]
+CMD ["track", "realtime", "blocks", "--config", "./config.json", "--verbose", "--health-port", "8080"]
