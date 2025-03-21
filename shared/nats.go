@@ -19,10 +19,10 @@ const (
 )
 
 var (
-	monitoredAddresses = mapset.NewSet[common.Address]()
-	natsConn           *nats.Conn
-	subscription       *nats.Subscription
-	onAddressAdded     AddressAddedCallback
+	monitoredAddresses     = mapset.NewSet[common.Address]()
+	natsConn               *nats.Conn
+	subscription           *nats.Subscription
+	callbackOnAddressAdded AddressAddedCallback
 )
 
 type Address struct {
@@ -39,14 +39,14 @@ type NatsConfig struct {
 	Password string `json:"password"`
 }
 
-// AddMonitoredAddress adds an address to the monitored addresses
-func AddMonitoredAddress(address common.Address) error {
-	if onAddressAdded == nil {
-		return fmt.Errorf("no address added callback set")
+// AddAddressToMonitoredAddresses adds an address to the monitored addresses
+func AddAddressToMonitoredAddresses(address common.Address) error {
+	if callbackOnAddressAdded == nil {
+		return fmt.Errorf("no address-added-callback set")
 	}
 
 	monitoredAddresses.Add(address)
-	onAddressAdded(address)
+	callbackOnAddressAdded(address)
 
 	slog.Info("Added monitored address", "address", address.String())
 
@@ -142,16 +142,20 @@ func RequestAddressList(ctx context.Context) error {
 		return fmt.Errorf("failed to unmarshal addresses: %w", err)
 	}
 
+	slog.Info("Received addresses from NATS", "addresses", addresses)
+
 	for _, address := range addresses {
-		AddMonitoredAddress(common.HexToAddress(address.Address))
+		if err := AddAddressToMonitoredAddresses(common.HexToAddress(address.Address)); err != nil {
+			return fmt.Errorf("failed to add address to monitored addresses: %w", err)
+		}
 	}
 
 	return nil
 }
 
-// SetAddressAddedCallback sets the callback function to be called when a new address is added
-func SetAddressAddedCallback(callback AddressAddedCallback) {
-	onAddressAdded = callback
+// SetCallbackOnAddressAdded sets the callback function to be called when a new address is added
+func SetCallbackOnAddressAdded(callback AddressAddedCallback) {
+	callbackOnAddressAdded = callback
 }
 
 // SubscribeToAddress subscribes to address addition and adds it to the monitored addresses
@@ -170,7 +174,7 @@ func SubscribeToAddress() error {
 				return
 			}
 
-			AddMonitoredAddress(common.HexToAddress(address.Address))
+			AddAddressToMonitoredAddresses(common.HexToAddress(address.Address))
 		},
 	)
 	if err != nil {

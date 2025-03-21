@@ -12,16 +12,18 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-func (p action) InitMonitorTransfers() {
-	shared.SetAddressAddedCallback(
+func init() {
+	shared.SetCallbackOnAddressAdded(
 		func(addr common.Address) {
 			addTxAddressAction(addr, handleAddressTx)
 		},
 	)
+}
 
+func (p action) InitMonitorTransfers() {
 	// monitor addresses for transactions
 	for _, address := range p.o.Addresses {
-		if err := shared.AddMonitoredAddress(address); err != nil {
+		if err := shared.AddAddressToMonitoredAddresses(address); err != nil {
 			slog.Error("failed to add monitored address", "address", address, "error", err)
 			os.Exit(1) // TODO: Bad!
 		}
@@ -50,10 +52,6 @@ func handleAddressTx(p ActionTxData) {
 		isFromMonitored = shared.MonitoredAddressesContain(from)
 		isToMonitored   = shared.MonitoredAddressesContain(to)
 	)
-
-	if !isFromMonitored && !isToMonitored {
-		return
-	}
 
 	if value.Cmp(big.NewInt(0)) == 0 {
 		return
@@ -111,6 +109,8 @@ func handleAddressTx(p ActionTxData) {
 
 // called when erc20 token we're tracking emits Transfer event
 func handleTokenTransfer(p ActionEventData) {
+	slog.Info("handleTokenTransfer", "ActionEventData", p)
+
 	var (
 		from            = p.DecodedTopics["from"].(common.Address)
 		to              = p.DecodedTopics["to"].(common.Address)
@@ -119,10 +119,6 @@ func handleTokenTransfer(p ActionEventData) {
 		isFromMonitored = shared.MonitoredAddressesContain(from)
 		isToMonitored   = shared.MonitoredAddressesContain(to)
 	)
-
-	if !isFromMonitored && !isToMonitored {
-		return
-	}
 
 	if value.Cmp(big.NewInt(0)) == 0 {
 		return
