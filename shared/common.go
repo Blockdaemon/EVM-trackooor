@@ -62,6 +62,8 @@ type TrackooorOptions struct {
 	HistoricalOptions HistoricalOptions
 
 	IsL2Chain bool // will account for invalid tx types
+
+	NATS NATSOptions
 }
 
 type ActionOptions struct {
@@ -82,6 +84,12 @@ type HistoricalOptions struct {
 	LoopBackwards      bool
 
 	BatchFetchBlocks bool
+}
+
+type NATSOptions struct {
+	URL      string `json:"url"`
+	User     string `json:"user"`
+	Password string `json:"password"`
 }
 
 // already processed blocks, txs or events

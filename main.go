@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -128,7 +127,7 @@ var realtimeBlocksCmd = &cobra.Command{
 	Long:   `Listens for newly mined blocks, to track events, transactions and blocks mined`,
 	Args:   cobra.ExactArgs(0),
 	PreRun: toggleVerbosity,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		setListenerOptions()
 
 		loadConfigFile(configFilepath)
@@ -136,6 +135,12 @@ var realtimeBlocksCmd = &cobra.Command{
 		trackooor.SetupListener(options)
 
 		actions.InitActions(options.Actions)
+
+		ctx := cmd.Context()
+
+		if err := shared.InitNATS(ctx, &options.NATS, actions.AddAddressToMonitoredAddresses); err != nil {
+			return fmt.Errorf("Failed to initialize NATS client: %w", err)
+		}
 
 		// Start health check server if port is specified
 		if healthCheckPort != "" {
@@ -149,6 +154,8 @@ var realtimeBlocksCmd = &cobra.Command{
 
 			trackooor.ListenToBlocks()
 		}
+
+		return nil
 	},
 }
 
@@ -424,22 +431,19 @@ func loadConfigFile(filename string) {
 	}
 
 	if v, ok := configOptions["nats"]; ok {
-		var natsConfig shared.NatsConfig
+		var natsOptions shared.NATSOptions
 
-		// First, convert the map value to JSON bytes
 		jsonBytes, err := json.Marshal(v)
 		if err != nil {
-			log.Fatalf("failed to marshal NATS config: %v", err)
+			log.Fatalf("failed to marshal: %w", err)
 		}
 
-		// Then unmarshal the JSON bytes into the natsConfig struct
-		if err := json.Unmarshal(jsonBytes, &natsConfig); err != nil {
-			log.Fatalf("failed to unmarshal NATS config: %v", err)
+		if err := json.Unmarshal(jsonBytes, &natsOptions); err != nil {
+			log.Fatalf("failed to unmarshal %s: %w", jsonBytes, err)
 		}
 
-		if err := shared.InitNATS(context.TODO(), &natsConfig); err != nil { // FIXME
-			log.Fatalf("Failed to initialize NATS: %v", err)
-		}
+		options.NATS = natsOptions
+
 	}
 
 	// load actions

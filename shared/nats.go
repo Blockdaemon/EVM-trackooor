@@ -3,11 +3,11 @@ package shared
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
-	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/nats-io/nats.go"
 )
@@ -19,39 +19,20 @@ const (
 )
 
 var (
-	monitoredAddresses     = mapset.NewSet[common.Address]()
-	natsConn               *nats.Conn
-	subscription           *nats.Subscription
-	callbackOnAddressAdded AddressAddedCallback
+	natsConn       *nats.Conn
+	subscription   *nats.Subscription
+	addressHandler AddressHandler
 )
 
-type Address struct {
-	Protocol string `json:"protocol"`
-	Network  string `json:"network"`
-	Address  string `json:"address"`
-}
-
-type AddressAddedCallback func(addr common.Address)
-
-type NatsConfig struct {
-	URL      string `json:"url"`
-	User     string `json:"user"`
-	Password string `json:"password"`
-}
-
-// AddAddressToMonitoredAddresses adds an address to the monitored addresses
-func AddAddressToMonitoredAddresses(address common.Address) error {
-	if callbackOnAddressAdded == nil {
-		return fmt.Errorf("no address-added-callback set")
+type (
+	AddressIdentifier struct {
+		Protocol string `json:"protocol"`
+		Network  string `json:"network"`
+		Address  string `json:"address"`
 	}
 
-	monitoredAddresses.Add(address)
-	callbackOnAddressAdded(address)
-
-	slog.Info("Added monitored address", "address", address.String())
-
-	return nil
-}
+	AddressHandler func(addr common.Address) error
+)
 
 // CloseNATS closes the NATS connection
 func CloseNATS() error {
@@ -70,11 +51,24 @@ func CloseNATS() error {
 }
 
 // InitNATS initializes the NATS connection
-func InitNATS(ctx context.Context, config *NatsConfig) error {
+func InitNATS(ctx context.Context, options *NATSOptions, handler AddressHandler) error {
+	if natsConn != nil {
+		return errors.New("NATS connection already initiated")
+	}
+
+	if options == nil {
+		return errors.New("empty NATS client options")
+	}
+
+	if addressHandler != nil {
+		return errors.New("address handler already set")
+	}
+	addressHandler = handler
+
 	var err error
 	natsConn, err = nats.Connect(
-		config.URL,
-		nats.UserInfo(config.User, config.Password),
+		options.URL,
+		nats.UserInfo(options.User, options.Password),
 		nats.Timeout(10*time.Second),    // Add a longer timeout
 		nats.RetryOnFailedConnect(true), // Retry connection
 		nats.MaxReconnects(5),           // Set max reconnection attempts
@@ -82,7 +76,7 @@ func InitNATS(ctx context.Context, config *NatsConfig) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to NATS: %w", err)
 	}
-	slog.Info("Connected to NATS server", "url", config.URL)
+	slog.Info("Connected to NATS server", "url", options.URL)
 
 	if err := SubscribeToAddress(); err != nil {
 		return fmt.Errorf("failed to subscribe to address events: %w", err)
@@ -95,12 +89,8 @@ func InitNATS(ctx context.Context, config *NatsConfig) error {
 	return nil
 }
 
-func MonitoredAddressesContain(addr common.Address) bool {
-	return monitoredAddresses.Contains(addr)
-}
-
-// PublishTransfer publishes transfer data to NATS
-func PublishTransfer(data any) error {
+// PublishSerializable publishes serializable data to NATS
+func PublishSerializable(data any) error {
 	if natsConn == nil {
 		return fmt.Errorf("NATS connection not initialized")
 	}
@@ -137,7 +127,7 @@ func RequestAddressList(ctx context.Context) error {
 	}
 
 	// Process the response
-	var addresses []Address
+	var addresses []AddressIdentifier
 	if err := json.Unmarshal(msg.Data, &addresses); err != nil {
 		return fmt.Errorf("failed to unmarshal addresses: %w", err)
 	}
@@ -145,17 +135,12 @@ func RequestAddressList(ctx context.Context) error {
 	slog.Info("Received addresses from NATS", "addresses", addresses)
 
 	for _, address := range addresses {
-		if err := AddAddressToMonitoredAddresses(common.HexToAddress(address.Address)); err != nil {
+		if err := addressHandler(common.HexToAddress(address.Address)); err != nil {
 			return fmt.Errorf("failed to add address to monitored addresses: %w", err)
 		}
 	}
 
 	return nil
-}
-
-// SetCallbackOnAddressAdded sets the callback function to be called when a new address is added
-func SetCallbackOnAddressAdded(callback AddressAddedCallback) {
-	callbackOnAddressAdded = callback
 }
 
 // SubscribeToAddress subscribes to address addition and adds it to the monitored addresses
@@ -168,13 +153,18 @@ func SubscribeToAddress() error {
 	subscription, err = natsConn.Subscribe(
 		SubjectAddressPublish,
 		func(msg *nats.Msg) {
-			var address Address
+			var address AddressIdentifier
 			if err := json.Unmarshal(msg.Data, &address); err != nil {
 				slog.Error("failed to unmarshal address", "error", err)
 				return
 			}
 
-			AddAddressToMonitoredAddresses(common.HexToAddress(address.Address))
+			if err := addressHandler(common.HexToAddress(address.Address)); err != nil {
+				slog.Error("handling address", "error", err)
+				return
+			}
+
+			return
 		},
 	)
 	if err != nil {

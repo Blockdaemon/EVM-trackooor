@@ -7,24 +7,27 @@ import (
 	"os"
 	"time"
 
+	mapset "github.com/deckarep/golang-set/v2"
+
 	"github.com/Zellic/EVM-trackooor/shared"
 	"github.com/Zellic/EVM-trackooor/utils"
 	"github.com/ethereum/go-ethereum/common"
 )
 
-func init() {
-	shared.SetCallbackOnAddressAdded(
-		func(addr common.Address) {
-			addTxAddressAction(addr, handleAddressTx)
-		},
-	)
+var monitoredAddresses = mapset.NewSet[common.Address]()
+
+func AddAddressToMonitoredAddresses(address common.Address) error {
+	addTxAddressAction(address, handleAddressTx)
+	monitoredAddresses.Add(address)
+
+	return nil
 }
 
 func (p action) InitMonitorTransfers() {
 	// monitor addresses for transactions
 	for _, address := range p.o.Addresses {
-		if err := shared.AddAddressToMonitoredAddresses(address); err != nil {
-			slog.Error("failed to add monitored address", "address", address, "error", err)
+		if err := AddAddressToMonitoredAddresses(address); err != nil {
+			slog.Error("failed to add address to monitored addresses", "address", address, "error", err)
 			os.Exit(1) // TODO: Bad!
 		}
 	}
@@ -43,46 +46,57 @@ func (p action) InitMonitorTransfers() {
 }
 
 // called when a tx is from/to monitored address
-func handleAddressTx(p ActionTxData) {
-	var (
-		from            = *p.From
-		to              = *p.To
-		value           = p.Transaction.Value()
-		webhookData     = p.ConvertToWebhookTxData()
-		isFromMonitored = shared.MonitoredAddressesContain(from)
-		isToMonitored   = shared.MonitoredAddressesContain(to)
-	)
+func handleAddressTx(tx ActionTxData) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	if value.Cmp(big.NewInt(0)) == 0 {
-		return
+	if tx.To == nil { // contract creation
+		receipt, err := shared.Client.TransactionReceipt(ctx, tx.Transaction.Hash())
+		if err != nil {
+			slog.Error("Failed to get transaction receipt", "hash", tx.Transaction.Hash(), "error", err)
+			return
+		}
+
+		tx.To = &receipt.ContractAddress
 	}
 
+	var (
+		from            = *tx.From
+		to              = *tx.To
+		webhookData     = tx.ToTransaction()
+		isFromMonitored = monitoredAddresses.Contains(from)
+		isToMonitored   = monitoredAddresses.Contains(to)
+	)
+
 	// Publish to NATS
-	if err := shared.PublishTransfer(webhookData); err != nil {
+	if err := shared.PublishSerializable(webhookData); err != nil {
 		slog.Error("Failed to publish webhook data", "error", err)
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
 	if isFromMonitored {
 		// Get sender's ETH balance
 		balance, err := shared.Client.BalanceAt(ctx, from, nil) // nil means latest block
 		if err != nil {
-			slog.Error("Failed to get ETH balance",
-				"wallet", from.String(),
-				"error", err)
-		} else {
-			slog.Info("ETH balance after sending transfer",
-				"wallet", from.String(),
-				"balance", utils.FormatDecimals(balance, 18))
+			slog.Error(
+				"Failed to get ETH balance",
+				"from", from.String(),
+				"error", err,
+			)
+			return
+		}
 
-			// Convert to balance webhook format and publish
-			balanceWebhook := p.ToSourceBalance(balance)
-			if err := shared.PublishTransfer(balanceWebhook); err != nil {
-				slog.Error("Failed to publish balance webhook data", "error", err)
-			}
+		slog.Info(
+			"ETH balance after sending transfer",
+			"from", from.String(),
+			"balance", utils.FormatDecimals(balance, 18),
+		)
+
+		// Convert to balance webhook format and publish
+		balanceWebhook := tx.ToSourceBalance(balance)
+		if err := shared.PublishSerializable(balanceWebhook); err != nil {
+			slog.Error("Failed to publish balance webhook data", "error", err)
+			return
 		}
 	}
 
@@ -90,49 +104,59 @@ func handleAddressTx(p ActionTxData) {
 		// Get receiver's ETH balance
 		balance, err := shared.Client.BalanceAt(ctx, to, nil) // nil means latest block
 		if err != nil {
-			slog.Error("Failed to get ETH balance",
-				"wallet", to.String(),
-				"error", err)
-		} else {
-			slog.Info("ETH balance after receiving transfer",
-				"wallet", to.String(),
-				"balance", utils.FormatDecimals(balance, 18))
-
-			// Convert to balance webhook format and publish
-			balanceWebhook := p.ToDestinationBalance(balance)
-			if err := shared.PublishTransfer(balanceWebhook); err != nil {
-				slog.Error("Failed to publish balance webhook data", "error", err)
-			}
+			slog.Error(
+				"Failed to get ETH balance",
+				"to", to.String(),
+				"error", err,
+			)
+			return
 		}
+
+		slog.Info(
+			"ETH balance after receiving transfer",
+			"to", to.String(),
+			"balance", utils.FormatDecimals(balance, 18),
+		)
+
+		// Convert to balance webhook format and publish
+		balanceWebhook := tx.ToDestinationBalance(balance)
+		if err := shared.PublishSerializable(balanceWebhook); err != nil {
+			slog.Error("Failed to publish balance webhook data", "error", err)
+			return
+		}
+
+		return
 	}
 }
 
 // called when erc20 token we're tracking emits Transfer event
-func handleTokenTransfer(p ActionEventData) {
-	slog.Info("handleTokenTransfer", "ActionEventData", p)
-
-	var (
-		from            = p.DecodedTopics["from"].(common.Address)
-		to              = p.DecodedTopics["to"].(common.Address)
-		value           = p.DecodedData["value"].(*big.Int)
-		token           = p.EventLog.Address
-		isFromMonitored = shared.MonitoredAddressesContain(from)
-		isToMonitored   = shared.MonitoredAddressesContain(to)
-	)
-
+func handleTokenTransfer(event ActionEventData) {
+	value := event.DecodedData["value"].(*big.Int)
 	if value.Cmp(big.NewInt(0)) == 0 {
 		return
 	}
 
 	var (
+		from            = event.DecodedTopics["from"].(common.Address)
+		to              = event.DecodedTopics["to"].(common.Address)
+		isFromMonitored = monitoredAddresses.Contains(from)
+		isToMonitored   = monitoredAddresses.Contains(to)
+	)
+
+	if !isFromMonitored && !isToMonitored {
+		return
+	}
+
+	var (
+		token     = event.EventLog.Address
 		tokenInfo = shared.RetrieveERC20Info(token)
 		decimals  = tokenInfo.Decimals
 		symbol    = tokenInfo.Symbol
 	)
 
 	// Convert to transfer webhook format and publish
-	webhookData := p.ConvertToWebhookLogData()
-	if err := shared.PublishTransfer(webhookData); err != nil {
+	webhookData := event.ToTransactionLog()
+	if err := shared.PublishSerializable(webhookData); err != nil {
 		slog.Error("Failed to publish webhook data", "error", err)
 		return
 	}
@@ -144,43 +168,57 @@ func handleTokenTransfer(p ActionEventData) {
 		// Get sender's token balance
 		balance, err := shared.GetERC20Balance(ctx, token, from)
 		if err != nil {
-			slog.Error("Failed to get token balance",
+			slog.Error(
+				"Failed to get token balance",
 				"token", token.String(),
 				"wallet", from.String(),
-				"error", err)
-		} else {
-			slog.Info("Token balance after transfer",
-				"token", symbol,
-				"wallet", from.String(),
-				"balance", utils.FormatDecimals(balance, decimals))
+				"error", err,
+			)
 
-			// Convert to balance webhook format and publish
-			balanceWebhook := p.ToSourceBalance(balance)
-			if err := shared.PublishTransfer(balanceWebhook); err != nil {
-				slog.Error("Failed to publish balance webhook data", "error", err)
-			}
+			return
 		}
+
+		slog.Info("Token balance after transfer",
+			"token", symbol,
+			"wallet", from.String(),
+			"balance", utils.FormatDecimals(balance, decimals))
+
+		// Convert to balance webhook format and publish
+		balanceWebhook := event.ToSourceBalance(balance)
+		if err := shared.PublishSerializable(balanceWebhook); err != nil {
+			slog.Error("Failed to publish balance webhook data", "error", err)
+		}
+
+		return
 	}
 
 	if isToMonitored {
 		// Get receiver's token balance
 		balance, err := shared.GetERC20Balance(ctx, token, to)
 		if err != nil {
-			slog.Error("Failed to get token balance",
+			slog.Error(
+				"Failed to get token balance",
 				"token", token.String(),
 				"wallet", to.String(),
-				"error", err)
-		} else {
-			slog.Info("Token balance after transfer",
-				"token", symbol,
-				"wallet", to.String(),
-				"balance", utils.FormatDecimals(balance, decimals))
+				"error", err,
+			)
 
-			// Convert to balance webhook format and publish
-			balanceWebhook := p.ToDestinationBalance(balance)
-			if err := shared.PublishTransfer(balanceWebhook); err != nil {
-				slog.Error("Failed to publish balance webhook data", "error", err)
-			}
+			return
 		}
+
+		slog.Info("Token balance after transfer",
+			"token", symbol,
+			"wallet", to.String(),
+			"balance", utils.FormatDecimals(balance, decimals))
+
+		// Convert to balance webhook format and publish
+		balanceWebhook := event.ToDestinationBalance(balance)
+		if err := shared.PublishSerializable(balanceWebhook); err != nil {
+			slog.Error("Failed to publish balance webhook data", "error", err)
+
+			return
+		}
+
+		return
 	}
 }

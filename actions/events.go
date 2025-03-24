@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"fmt"
 	"math/big"
 	"time"
 
@@ -12,14 +13,25 @@ import (
 
 const (
 	AssetNative             = "native"
-	ChainID                 = "eip155:11155111"
 	EventTypeTransaction    = "unified_confirmed_tx"
 	EventTypeTransactionLog = "unified_confirmed_tx_log"
 	EventTypeBalance        = "unified_confirmed_balance"
-	Network                 = "sepolia"
 	ProtocolEthereum        = "ethereum"
 	StatusSuccess           = "success"
 )
+
+var networkMap = map[string]string{
+	"1":        "mainnet",
+	"5":        "goerli",
+	"2023":     "lower qa",
+	"2025":     "higher prod",
+	"17069":    "holesky",
+	"11155111": "sepolia",
+}
+
+func (txData *ActionTxData) ToDestinationBalance(balance *big.Int) webhook.WebhookMessageUnifiedConfirmedBalanceRequest {
+	return txData.toBalance(txData.To, balance)
+}
 
 // ToSourceBalance converts ActionTxData to WebhookMessageUnifiedConfirmedBalanceRequest
 // with the latest ETH balance
@@ -27,40 +39,19 @@ func (txData *ActionTxData) ToSourceBalance(balance *big.Int) webhook.WebhookMes
 	return txData.toBalance(txData.From, balance)
 }
 
-func (txData *ActionTxData) ToDestinationBalance(balance *big.Int) webhook.WebhookMessageUnifiedConfirmedBalanceRequest {
-	return txData.toBalance(txData.To, balance)
-}
-
-func (txData *ActionTxData) toBalance(address *common.Address, balance *big.Int) webhook.WebhookMessageUnifiedConfirmedBalanceRequest {
-	balanceData := webhook.WebhookMessageUnifiedConfirmedBalanceData{
-		Address:        address.String(),
-		Asset:          AssetNative,
-		BlockHash:      txData.Block.Hash().String(),
-		BlockNumber:    txData.Block.Number().Uint64(),
-		BlockTimestamp: uint64(txData.Block.Time()),
-		Value:          balance,
-	}
-
-	return webhook.WebhookMessageUnifiedConfirmedBalanceRequest{
-		ChainId:   ChainID,
-		Data:      balanceData,
-		EventType: EventTypeBalance,
-		Network:   Network,
-		Protocol:  ProtocolEthereum,
-	}
-}
-
-// ConvertToWebhookTxData converts ActionTxData to WebhookMessageUnifiedConfirmedTxRequest
-func (txData *ActionTxData) ConvertToWebhookTxData() webhook.WebhookMessageUnifiedConfirmedTxRequest {
+// ToTransaction converts ActionTxData to WebhookMessageUnifiedConfirmedTxRequest
+func (txData *ActionTxData) ToTransaction() webhook.WebhookMessageUnifiedConfirmedTxRequest {
 	// Create tx hash string
 	txHash := txData.Transaction.Hash().String()
 
 	// Create transfer data for native ETH transfer
 	var transfers []webhook.Transfer
-	if txData.Transaction.Value().Sign() > 0 && txData.From != nil && txData.To != nil {
-		fromStr := txData.From.String()
-		toStr := txData.To.String()
-		assetStr := AssetNative
+	if txData.From != nil { // the to address might be nil (contract deployment); the value might be 0 (contract call)
+		var (
+			fromStr  = txData.From.String()
+			toStr    = txData.To.String()
+			assetStr = AssetNative
+		)
 
 		transfers = append(
 			transfers,
@@ -85,23 +76,12 @@ func (txData *ActionTxData) ConvertToWebhookTxData() webhook.WebhookMessageUnifi
 			)
 		}
 	}
-	// FIXME: How to set this?
+
+	// FIXME: How to set fee?
 	print(new(big.Int).Mul(new(big.Int).SetUint64(gasLimit), gasPrice))
 
-	// // Create fee data
-	// feeJson := struct {
-	// 	Amount   string `json:"amount"`
-	// 	Currency string `json:"currency"`
-	// }{
-	// 	Amount:   fee.String(),
-	// 	Currency: "ETH",
-	// }
-	// feeData := webhook.WebhookMessageUnifiedConfirmedTxData_Fee{
-	// 	union: feeJson,
-	// }
-
 	return webhook.WebhookMessageUnifiedConfirmedTxRequest{
-		ChainId: ChainID,
+		ChainId: prefixedChainIDString(shared.ChainID),
 		Data: webhook.WebhookMessageUnifiedConfirmedTxData{
 			BlockHash:   txData.Block.Hash().String(),
 			BlockNumber: txData.Block.Number().Uint64(),
@@ -113,13 +93,50 @@ func (txData *ActionTxData) ConvertToWebhookTxData() webhook.WebhookMessageUnifi
 			TxId:        txHash,
 		},
 		EventType: EventTypeTransaction,
-		Network:   Network,
+		Network:   networkName(shared.ChainID),
 		Protocol:  ProtocolEthereum,
 	}
 }
 
-// ConvertToWebhookLogData converts ActionEventData to WebhookMessageUnifiedConfirmedTxLogData
-func (eventData *ActionEventData) ConvertToWebhookLogData() webhook.WebhookMessageUnifiedConfirmedTxLogRequest {
+func (txData *ActionTxData) toBalance(address *common.Address, balance *big.Int) webhook.WebhookMessageUnifiedConfirmedBalanceRequest {
+	balanceData := webhook.WebhookMessageUnifiedConfirmedBalanceData{
+		Address:        address.String(),
+		Asset:          AssetNative,
+		BlockHash:      txData.Block.Hash().String(),
+		BlockNumber:    txData.Block.Number().Uint64(),
+		BlockTimestamp: uint64(txData.Block.Time()),
+		Value:          balance,
+	}
+
+	return webhook.WebhookMessageUnifiedConfirmedBalanceRequest{
+		ChainId:   prefixedChainIDString(shared.ChainID),
+		Data:      balanceData,
+		EventType: EventTypeBalance,
+		Network:   networkName(shared.ChainID),
+		Protocol:  ProtocolEthereum,
+	}
+}
+
+// ToDestinationBalance converts ActionEventData to WebhookMessageUnifiedConfirmedBalanceRequest
+// with the latest ERC20 token balance
+func (eventData *ActionEventData) ToDestinationBalance(balance *big.Int) webhook.WebhookMessageUnifiedConfirmedBalanceRequest {
+	// Get address from the event (using 'to' address)
+	address := eventData.DecodedTopics["to"].(common.Address)
+
+	return eventData.toBalance(&address, balance)
+}
+
+// ToSourceBalance converts ActionEventData to WebhookMessageUnifiedConfirmedBalanceRequest
+// with the latest ERC20 token balance
+func (eventData *ActionEventData) ToSourceBalance(balance *big.Int) webhook.WebhookMessageUnifiedConfirmedBalanceRequest {
+	// Get address from the event (using 'from' address)
+	address := eventData.DecodedTopics["from"].(common.Address)
+
+	return eventData.toBalance(&address, balance)
+}
+
+// ToTransactionLog converts ActionEventData to WebhookMessageUnifiedConfirmedTxLogData
+func (eventData *ActionEventData) ToTransactionLog() webhook.WebhookMessageUnifiedConfirmedTxLogRequest {
 	// Create tx hash string
 	txHash := eventData.EventLog.TxHash.String()
 
@@ -148,7 +165,7 @@ func (eventData *ActionEventData) ConvertToWebhookLogData() webhook.WebhookMessa
 	)
 
 	return webhook.WebhookMessageUnifiedConfirmedTxLogRequest{
-		ChainId: ChainID,
+		ChainId: prefixedChainIDString(shared.ChainID),
 		Data: webhook.WebhookMessageUnifiedConfirmedTxLogData{
 			BlockHash:   eventData.EventLog.BlockHash.String(),
 			BlockNumber: eventData.EventLog.BlockNumber,
@@ -159,27 +176,9 @@ func (eventData *ActionEventData) ConvertToWebhookLogData() webhook.WebhookMessa
 			TxId:        txHash,
 		},
 		EventType: EventTypeTransactionLog,
-		Network:   Network,
+		Network:   networkName(shared.ChainID),
 		Protocol:  ProtocolEthereum,
 	}
-}
-
-// ToSourceBalance converts ActionEventData to WebhookMessageUnifiedConfirmedBalanceRequest
-// with the latest ERC20 token balance
-func (eventData *ActionEventData) ToSourceBalance(balance *big.Int) webhook.WebhookMessageUnifiedConfirmedBalanceRequest {
-	// Get address from the event (using 'from' address)
-	address := eventData.DecodedTopics["from"].(common.Address)
-
-	return eventData.toBalance(&address, balance)
-}
-
-// ToDestinationBalance converts ActionEventData to WebhookMessageUnifiedConfirmedBalanceRequest
-// with the latest ERC20 token balance
-func (eventData *ActionEventData) ToDestinationBalance(balance *big.Int) webhook.WebhookMessageUnifiedConfirmedBalanceRequest {
-	// Get address from the event (using 'to' address)
-	address := eventData.DecodedTopics["to"].(common.Address)
-
-	return eventData.toBalance(&address, balance)
 }
 
 func (eventData *ActionEventData) toBalance(address *common.Address, balance *big.Int) webhook.WebhookMessageUnifiedConfirmedBalanceRequest {
@@ -196,10 +195,22 @@ func (eventData *ActionEventData) toBalance(address *common.Address, balance *bi
 	)
 
 	return webhook.WebhookMessageUnifiedConfirmedBalanceRequest{
-		ChainId:   ChainID,
+		ChainId:   prefixedChainIDString(shared.ChainID),
 		Data:      balanceData,
 		EventType: EventTypeBalance,
-		Network:   Network,
+		Network:   networkName(shared.ChainID),
 		Protocol:  ProtocolEthereum,
 	}
+}
+
+func networkName(chainID *big.Int) string {
+	name, ok := networkMap[chainID.String()]
+	if !ok {
+		return ""
+	}
+	return name
+}
+
+func prefixedChainIDString(chainID *big.Int) string {
+	return fmt.Sprintf("eip155:%d", chainID)
 }
