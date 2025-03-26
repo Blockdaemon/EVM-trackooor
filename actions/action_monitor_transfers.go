@@ -83,6 +83,7 @@ func handleAddressTx(tx ActionTxData) {
 				"from", from.String(),
 				"error", err,
 			)
+
 			return
 		}
 
@@ -96,6 +97,7 @@ func handleAddressTx(tx ActionTxData) {
 		balanceWebhook := tx.ToSourceBalance(balance)
 		if err := shared.PublishSerializable(balanceWebhook); err != nil {
 			slog.Error("Failed to publish balance webhook data", "error", err)
+
 			return
 		}
 	}
@@ -109,6 +111,7 @@ func handleAddressTx(tx ActionTxData) {
 				"to", to.String(),
 				"error", err,
 			)
+
 			return
 		}
 
@@ -122,10 +125,9 @@ func handleAddressTx(tx ActionTxData) {
 		balanceWebhook := tx.ToDestinationBalance(balance)
 		if err := shared.PublishSerializable(balanceWebhook); err != nil {
 			slog.Error("Failed to publish balance webhook data", "error", err)
+
 			return
 		}
-
-		return
 	}
 }
 
@@ -187,9 +189,9 @@ func handleTokenTransfer(event ActionEventData) {
 		balanceWebhook := event.ToSourceBalance(balance)
 		if err := shared.PublishSerializable(balanceWebhook); err != nil {
 			slog.Error("Failed to publish balance webhook data", "error", err)
-		}
 
-		return
+			return
+		}
 	}
 
 	if isToMonitored {
@@ -218,7 +220,5 @@ func handleTokenTransfer(event ActionEventData) {
 
 			return
 		}
-
-		return
 	}
 }

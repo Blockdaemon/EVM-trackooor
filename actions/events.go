@@ -23,8 +23,8 @@ const (
 var networkMap = map[string]string{
 	"1":        "mainnet",
 	"5":        "goerli",
-	"2023":     "lower qa",
-	"2025":     "higher prod",
+	"2023":     "lower-qa",
+	"2025":     "higher-prod",
 	"17069":    "holesky",
 	"11155111": "sepolia",
 }
