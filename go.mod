@@ -7,7 +7,6 @@ require (
 	github.com/ethereum/go-ethereum v1.14.3
 	github.com/nats-io/nats.go v1.39.1
 	github.com/spf13/cobra v1.8.1
-	go.openly.dev/pointy v1.3.0
 )
 
 require (

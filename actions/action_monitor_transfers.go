@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"math/big"
-	"os"
 	"time"
 
 	mapset "github.com/deckarep/golang-set/v2"
@@ -14,34 +13,45 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-var monitoredAddresses = mapset.NewSet[common.Address]()
+const (
+	eventSignatureTransfer = "Transfer(address,address,uint256)"
+)
+
+var (
+	monitoredAddresses = mapset.NewSet[common.Address]()
+)
 
 func AddAddressToMonitoredAddresses(address common.Address) error {
 	addTxAddressAction(address, handleAddressTx)
 	monitoredAddresses.Add(address)
+	return nil
+}
 
+func AddContractAddressToMonitoredAddresses(contractAddress common.Address) error {
+	addAddressEventSigAction(
+		contractAddress,
+		eventSignatureTransfer,
+		handleTokenTransfer,
+	)
+	monitoredAddresses.Add(contractAddress)
 	return nil
 }
 
 func (p action) InitMonitorTransfers() {
 	// monitor addresses for transactions
 	for _, address := range p.o.Addresses {
-		if err := AddAddressToMonitoredAddresses(address); err != nil {
-			slog.Error("failed to add address to monitored addresses", "address", address, "error", err)
-			os.Exit(1) // TODO: Bad!
-		}
+		AddAddressToMonitoredAddresses(address)
 	}
 
 	// monitor erc20 token for transfer events
 	erc20TokenAddresses := p.o.CustomOptions["erc20-tokens"].([]any)
 	for _, erc20TokenAddress := range erc20TokenAddresses {
-		erc20TokenAddressString := erc20TokenAddress.(string)
-
-		addAddressEventSigAction(
-			common.HexToAddress(erc20TokenAddressString),
-			"Transfer(address,address,uint256)",
-			handleTokenTransfer,
+		var (
+			erc20TokenAddressString = erc20TokenAddress.(string)
+			typedERC20TokenAddress  = common.HexToAddress(erc20TokenAddressString)
 		)
+
+		AddContractAddressToMonitoredAddresses(typedERC20TokenAddress)
 	}
 }
 

@@ -19,9 +19,9 @@ const (
 )
 
 var (
-	natsConn       *nats.Conn
-	subscription   *nats.Subscription
-	addressHandler AddressHandler
+	natsConn                               *nats.Conn
+	subscription                           *nats.Subscription
+	addressHandler, contractAddressHandler AddressHandler
 )
 
 type (
@@ -51,7 +51,11 @@ func CloseNATS() error {
 }
 
 // InitNATS initializes the NATS connection
-func InitNATS(ctx context.Context, options *NATSOptions, handler AddressHandler) error {
+func InitNATS(
+	ctx context.Context,
+	options *NATSOptions,
+	addressHandlerInput, contractAddressHandlerInput AddressHandler,
+) error {
 	if natsConn != nil {
 		return errors.New("NATS connection already initiated")
 	}
@@ -63,7 +67,12 @@ func InitNATS(ctx context.Context, options *NATSOptions, handler AddressHandler)
 	if addressHandler != nil {
 		return errors.New("address handler already set")
 	}
-	addressHandler = handler
+	addressHandler = addressHandlerInput
+
+	if contractAddressHandler != nil {
+		return errors.New("contract address handler already set")
+	}
+	contractAddressHandler = contractAddressHandlerInput
 
 	var err error
 	natsConn, err = nats.Connect(
@@ -138,6 +147,10 @@ func RequestAddressList(ctx context.Context) error {
 		if err := addressHandler(common.HexToAddress(address.Address)); err != nil {
 			return fmt.Errorf("failed to add address to monitored addresses: %w", err)
 		}
+
+		if err := contractAddressHandler(common.HexToAddress(address.Address)); err != nil {
+			return fmt.Errorf("failed to add contract address to monitored addresses: %w", err)
+		}
 	}
 
 	return nil
@@ -161,6 +174,11 @@ func SubscribeToAddress() error {
 
 			if err := addressHandler(common.HexToAddress(address.Address)); err != nil {
 				slog.Error("handling address", "error", err)
+				return
+			}
+
+			if err := contractAddressHandler(common.HexToAddress(address.Address)); err != nil {
+				slog.Error("handling contract address", "error", err)
 				return
 			}
 

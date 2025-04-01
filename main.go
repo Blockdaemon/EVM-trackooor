@@ -138,7 +138,12 @@ var realtimeBlocksCmd = &cobra.Command{
 
 		ctx := cmd.Context()
 
-		if err := shared.InitNATS(ctx, &options.NATS, actions.AddAddressToMonitoredAddresses); err != nil {
+		if err := shared.InitNATS(
+			ctx,
+			&options.NATS,
+			actions.AddAddressToMonitoredAddresses,
+			actions.AddContractAddressToMonitoredAddresses,
+		); err != nil {
 			return fmt.Errorf("Failed to initialize NATS client: %w", err)
 		}
 
@@ -435,11 +440,11 @@ func loadConfigFile(filename string) {
 
 		jsonBytes, err := json.Marshal(v)
 		if err != nil {
-			log.Fatalf("failed to marshal: %w", err)
+			log.Fatalf("failed to marshal: %v", err)
 		}
 
 		if err := json.Unmarshal(jsonBytes, &natsOptions); err != nil {
-			log.Fatalf("failed to unmarshal %s: %w", jsonBytes, err)
+			log.Fatalf("failed to unmarshal %s: %v", jsonBytes, err)
 		}
 
 		options.NATS = natsOptions
