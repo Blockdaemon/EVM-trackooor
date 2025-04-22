@@ -1,5 +1,5 @@
 # Build stage
-FROM public.ecr.aws/docker/library/golang:1.24.0-alpine3.21 AS builder
+FROM golang:1.24.2-alpine3.21 AS builder
 
 # Install git and build dependencies
 RUN apk add --no-cache git build-base
