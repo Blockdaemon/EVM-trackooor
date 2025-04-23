@@ -2,7 +2,7 @@ name: Build and push image
 
 on:
   push:
-    branches: [ main ]
+    branches: [ nats ]
     tags: ["*"]
 
 permissions:
@@ -12,12 +12,6 @@ permissions:
 jobs:
   build-and-push:
     runs-on: kube-dind
-    strategy:
-      matrix:
-        account:
-          - '190367695196'
-          - '352033354486'
-          - '638663786504'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
