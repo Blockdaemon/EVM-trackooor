@@ -28,8 +28,9 @@ type NATSSuite struct {
 	suite.Suite
 
 	// shared
-	natsServer    *server.Server
-	natsServerURL string
+	natsServer        *server.Server
+	natsServerOptions *server.Options
+	natsServerURL     string
 
 	// mock responder
 	natsClient       *nats.Conn
@@ -44,25 +45,24 @@ type NATSSuite struct {
 
 // SetupSuite runs once before all tests in the suite
 func (s *NATSSuite) SetupSuite() {
-	opts := &server.Options{
+	s.natsServerOptions = &server.Options{
 		Host:   "127.0.0.1",
 		Port:   -1, // random available port
 		NoLog:  true,
 		NoSigs: true,
 	}
-
-	server, err := server.NewServer(opts)
+	server, err := server.NewServer(s.natsServerOptions)
 	s.Require().NoError(err)
-	s.natsServer = server
-
 	go server.Start()
-
-	// Wait for server to be ready
 	s.Require().True(server.ReadyForConnections(5 * time.Second))
+	s.natsServer = server
 	s.natsServerURL = server.ClientURL()
 
 	// Create client of the responder
-	s.natsClient, err = nats.Connect(s.natsServerURL)
+	s.natsClient, err = nats.Connect(
+		s.natsServerURL,
+		nats.MaxReconnects(-1), // infinite retries
+	)
 	s.Require().NoError(err)
 }
 
@@ -91,17 +91,12 @@ func (s *NATSSuite) SetupTest() {
 func (s *NATSSuite) resetPackageVariables() {
 	natsMutex.Lock()
 	defer natsMutex.Unlock()
+	err := cleanupSubscription()
+	s.Require().NoError(err)
 
 	if natsConn != nil {
 		natsConn.Close()
 		natsConn = nil
-	}
-
-	if subscription != nil {
-		if err := subscription.Unsubscribe(); err != nil {
-			s.T().Logf("Failed to unsubscribe from subscription: %v", err)
-		}
-		subscription = nil
 	}
 
 	if stopLoggingFunc != nil {
@@ -169,10 +164,10 @@ func (s *NATSSuite) initNATSWithHandlers(addresses []AddressIdentifier) {
 	)
 	s.Require().NoError(err)
 
+	time.Sleep(1 * time.Second)
+
 	s.Require().True(isNATSConnected())
-	s.Require().NotNil(natsConn)
-	s.Require().NotNil(subscription)
-	s.Require().True(subscription.IsValid())
+	s.Require().True(hasNATSSubscription())
 }
 
 func (s *NATSSuite) TestCloseNATS() {
@@ -180,9 +175,9 @@ func (s *NATSSuite) TestCloseNATS() {
 
 	err := CloseNATS()
 	s.Require().NoError(err)
+
 	s.Require().False(isNATSConnected())
-	s.Require().Nil(natsConn)
-	s.Require().Nil(subscription)
+	s.Require().False(hasNATSSubscription())
 }
 
 func (s *NATSSuite) TestInitNATS_Error() {
@@ -335,10 +330,71 @@ func (s *NATSSuite) TestPublishSerializable_OK() {
 	err = PublishSerializable(data)
 	s.Require().NoError(err)
 
-	// Wait for message to be received
 	time.Sleep(1 * time.Second)
 
 	lock.Lock()
 	defer lock.Unlock()
 	s.Require().Equal(data, dataReceived)
+}
+
+func (s *NATSSuite) TestReconnect() {
+	s.initNATSWithHandlers([]AddressIdentifier{})
+
+	// Messaging works.
+	addressIdentifier := AddressIdentifier{
+		Protocol: "ethereum",
+		Network:  "mainnet",
+		Address:  "0x1234567890123456789012345678901234567890",
+	}
+	addressIdentifierBytes, _ := json.Marshal(addressIdentifier)
+	err := s.natsClient.Publish(SubjectAddressPublish, addressIdentifierBytes)
+	s.Require().NoError(err)
+
+	waitTime := 1 * time.Second
+	time.Sleep(waitTime)
+
+	s.lock.Lock()
+	s.Require().Len(s.addresses, 1)
+	s.Require().Len(s.contractAddresses, 1)
+	s.lock.Unlock()
+
+	s.natsServer.Shutdown()
+
+	time.Sleep(waitTime)
+
+	// Restart server.
+	server, err := server.NewServer(s.natsServerOptions)
+	s.Require().NoError(err)
+
+	go server.Start()
+
+	s.Require().True(server.ReadyForConnections(5 * time.Second))
+	s.natsServer = server
+
+	time.Sleep(waitTime)
+
+	s.Require().True(isNATSConnected())
+	s.Require().True(hasNATSSubscription())
+
+	// Messaging works after reconnection.
+	err = s.natsClient.Publish(SubjectAddressPublish, addressIdentifierBytes)
+	s.Require().NoError(err)
+
+	time.Sleep(waitTime)
+
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	s.Require().Len(s.addresses, 2)
+	s.Require().Len(s.contractAddresses, 2)
+}
+
+// hasNATSSubscription checks if NATS subscription is valid
+func hasNATSSubscription() bool {
+	natsMutex.RLock()
+	defer natsMutex.RUnlock()
+
+	if subscription == nil {
+		return false
+	}
+	return subscription.IsValid()
 }
