@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -20,8 +21,11 @@ const (
 
 var (
 	natsConn                               *nats.Conn
+	natsMutex                              sync.RWMutex
+	natsOptions                            *NATSOptions
 	subscription                           *nats.Subscription
 	addressHandler, contractAddressHandler AddressHandler
+	stopLoggingFunc                        func()
 )
 
 type (
@@ -36,17 +40,27 @@ type (
 
 // CloseNATS closes the NATS connection
 func CloseNATS() error {
-	if subscription != nil {
-		if err := subscription.Unsubscribe(); err != nil {
-			return fmt.Errorf("failed to unsubscribe from NATS: %w", err)
-		}
+	natsMutex.Lock()
+	defer natsMutex.Unlock()
+
+	if stopLoggingFunc != nil {
+		stopLoggingFunc()
+		stopLoggingFunc = nil
 	}
+
+	if err := cleanupSubscription(); err != nil {
+		slog.Warn("Failed to cleanup NATS subscription", "error", err)
+	}
+
 	if natsConn != nil {
 		if err := natsConn.Drain(); err != nil {
-			return fmt.Errorf("failed to drain NATS connection: %w", err)
+			slog.Warn("Failed to drain NATS connection", "error", err)
 		}
+
 		natsConn.Close()
+		natsConn = nil
 	}
+
 	return nil
 }
 
@@ -56,6 +70,9 @@ func InitNATS(
 	options *NATSOptions,
 	addressHandlerInput, contractAddressHandlerInput AddressHandler,
 ) error {
+	natsMutex.Lock()
+	defer natsMutex.Unlock()
+
 	if natsConn != nil {
 		return errors.New("NATS connection already initiated")
 	}
@@ -74,24 +91,13 @@ func InitNATS(
 	}
 	contractAddressHandler = contractAddressHandlerInput
 
-	var err error
-	natsConn, err = nats.Connect(
-		options.URL,
-		nats.UserInfo(options.User, options.Password),
-		nats.Timeout(10*time.Second),    // Add a longer timeout
-		nats.RetryOnFailedConnect(true), // Retry connection
-		nats.MaxReconnects(5),           // Set max reconnection attempts
-	)
-	if err != nil {
-		return fmt.Errorf("failed to connect to NATS: %w", err)
-	}
-	slog.Info("Connected to NATS server", "url", options.URL)
+	natsOptions = options
 
-	if err := SubscribeToAddress(); err != nil {
-		return fmt.Errorf("failed to subscribe to address events: %w", err)
+	if err := connectToNATS(); err != nil {
+		return err
 	}
 
-	if err := RequestAddressList(ctx); err != nil {
+	if err := requestAddressList(ctx); err != nil {
 		return fmt.Errorf("failed to request addresses: %w", err)
 	}
 
@@ -100,8 +106,8 @@ func InitNATS(
 
 // PublishSerializable publishes serializable data to NATS
 func PublishSerializable(data any) error {
-	if natsConn == nil {
-		return fmt.Errorf("NATS connection not initialized")
+	if !isNATSConnected() {
+		return errors.New("not connected to nats server")
 	}
 
 	// Convert data to JSON
@@ -123,10 +129,140 @@ func PublishSerializable(data any) error {
 	return nil
 }
 
-// RequestAddressList requests the latest list of addresses from NATS and adds them to the monitored addresses
-func RequestAddressList(ctx context.Context) error {
+// cleanupSubscription cleans up the NATS subscription.
+func cleanupSubscription() error {
+	if subscription != nil {
+		if err := subscription.Unsubscribe(); err != nil {
+			return fmt.Errorf("failed to unsubscribe from NATS subject %s: %w", SubjectAddressPublish, err)
+		}
+
+		if err := subscription.Drain(); err != nil {
+			return fmt.Errorf("failed to drain NATS subscription: %w", err)
+		}
+
+		subscription = nil
+	}
+
+	return nil
+}
+
+// connectToNATS establishes a connection to NATS with robust reconnection options
+func connectToNATS() error {
+	if natsOptions == nil {
+		return errors.New("NATS options not set")
+	}
+
+	// Stop existing stats logging
+	if stopLoggingFunc != nil {
+		stopLoggingFunc()
+		stopLoggingFunc = nil
+	}
+
+	// Close existing connection if any
+	if natsConn != nil {
+		natsConn.Close()
+		natsConn = nil
+	}
+
+	disconnectedHandler := func(c *nats.Conn, err error) {
+		servers := c.Servers()
+		slog.Info("Disconnected from NATS servers", "error", err, "servers", servers)
+	}
+	reconnectHandler := func(c *nats.Conn) {
+		natsMutex.Lock()
+		defer natsMutex.Unlock()
+
+		slog.Info("Reconnected to NATS", "url", c.ConnectedUrlRedacted())
+		if err := subscribeToAddress(); err != nil {
+			slog.Error("Failed to reestablish subscription after reconnect", "error", err)
+		}
+	}
+	connectHandler := func(c *nats.Conn) {
+		natsMutex.Lock()
+		defer natsMutex.Unlock()
+
+		slog.Info("Connected to NATS", "url", c.ConnectedUrlRedacted())
+		if err := subscribeToAddress(); err != nil {
+			slog.Error("Failed to establish subscription after connect", "error", err)
+		}
+	}
+
+	var err error
+	natsConn, err = nats.Connect(
+		natsOptions.URL,
+		nats.UserInfo(natsOptions.User, natsOptions.Password),
+		nats.Timeout(10*time.Second),
+		nats.RetryOnFailedConnect(true),
+		nats.MaxReconnects(-1),            // infinite retries
+		nats.ReconnectWait(1*time.Second), // wait time between reconnection attempts
+		nats.DisconnectErrHandler(disconnectedHandler),
+		nats.ReconnectHandler(reconnectHandler),
+		nats.ConnectHandler(connectHandler),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to connect to NATS: %w", err)
+	}
+
+	// Start logging statistics
+	stopLoggingFunc = logStats(natsConn, 1*time.Minute)
+
+	slog.Info("Connected to NATS server", "url", natsOptions.URL)
+	return nil
+}
+
+// isNATSConnected checks if NATS connection is active and connected
+func isNATSConnected() bool {
 	if natsConn == nil {
-		return fmt.Errorf("NATS connection not initialized")
+		return false
+	}
+	return natsConn.IsConnected()
+}
+
+// logStats logs NATS connection statistics periodically
+func logStats(natsConn *nats.Conn, interval time.Duration) func() {
+	var (
+		stop = make(chan struct{})
+		once sync.Once
+	)
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				if natsConn != nil && natsConn.IsConnected() {
+					stats := natsConn.Stats()
+					slog.Info(
+						"NATS Connection Stats",
+						"url", natsConn.ConnectedUrlRedacted(),
+						"in_msgs", stats.InMsgs,
+						"out_msgs", stats.OutMsgs,
+						"in_bytes", stats.InBytes,
+						"out_bytes", stats.OutBytes,
+						"reconnects", stats.Reconnects,
+					)
+				}
+			case <-stop:
+				return
+			}
+		}
+	}()
+
+	return func() {
+		once.Do(
+			func() {
+				close(stop)
+			},
+		)
+	}
+}
+
+// requestAddressList requests the latest list of addresses from NATS and adds them to the monitored addresses
+func requestAddressList(ctx context.Context) error {
+	if !isNATSConnected() {
+		return errors.New("not connected to nats server")
 	}
 
 	// Send request with timeout context
@@ -156,14 +292,15 @@ func RequestAddressList(ctx context.Context) error {
 	return nil
 }
 
-// SubscribeToAddress subscribes to address addition and adds it to the monitored addresses
-func SubscribeToAddress() error {
-	if natsConn == nil {
-		return fmt.Errorf("NATS connection not initialized")
+// subscribeToAddress subscribes to address addition and adds it to the monitored addresses.
+// This function assumes the NATS connection is already established.
+func subscribeToAddress() error {
+	// Always clean up existing subscription first
+	if err := cleanupSubscription(); err != nil {
+		slog.Warn("Failed to cleanup existing subscription", "error", err)
 	}
 
-	var err error
-	subscription, err = natsConn.Subscribe(
+	newSubscription, err := natsConn.Subscribe(
 		SubjectAddressPublish,
 		func(msg *nats.Msg) {
 			var address AddressIdentifier
@@ -181,13 +318,13 @@ func SubscribeToAddress() error {
 				slog.Error("handling contract address", "error", err)
 				return
 			}
-
-			return
 		},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to NATS subject %s: %w", SubjectAddressPublish, err)
 	}
+
+	subscription = newSubscription
 
 	return nil
 }

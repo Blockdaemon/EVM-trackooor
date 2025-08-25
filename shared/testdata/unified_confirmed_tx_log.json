@@ -1,0 +1,22 @@
+{
+  "chain_id": "eip155:17000",
+  "protocol": "ethereum",
+  "network": "holesky",
+  "event_type": "unified_confirmed_tx_log",
+  "data": {
+    "block_number": 3302070,
+    "block_hash": "0xf37c767a7557cd15ba7377607f26cc3187b59fbfca524710d92fcf08df84ce33",
+    "tx_id": "0x3aa3619147b4d1a7ee56a4b0c52a216b849dbe7fe3acd07adf74cf6484052bc8",
+    "tx_hash": "0x3aa3619147b4d1a7ee56a4b0c52a216b849dbe7fe3acd07adf74cf6484052bc8",
+    "timestamp": 1738906476,
+    "status": "success",
+    "transfers": [
+      {
+        "asset": "0xbD9EEEa5402e95cEd15Bb411a4dd923b6C910215",
+        "from": "0x4AAfD4F02dfB48da90A3a867DFaf3eCa89bf7cCE",
+        "to": "0x32D33A426CEd6c25B4A1E78602CA0A31Df2D4848",
+        "value": 10000000000000000000
+      }
+    ]
+  }
+}
