@@ -41,133 +41,8 @@ type NATSSuite struct {
 	contractAddresses []common.Address
 
 	lock sync.Mutex
-}
 
-// SetupSuite runs once before all tests in the suite
-func (s *NATSSuite) SetupSuite() {
-	s.natsServerOptions = &server.Options{
-		Host:   "127.0.0.1",
-		Port:   -1, // random available port
-		NoLog:  true,
-		NoSigs: true,
-	}
-	server, err := server.NewServer(s.natsServerOptions)
-	s.Require().NoError(err)
-	go server.Start()
-	s.Require().True(server.ReadyForConnections(5 * time.Second))
-	s.natsServer = server
-	s.natsServerURL = server.ClientURL()
-
-	// Create client of the responder
-	s.natsClient, err = nats.Connect(
-		s.natsServerURL,
-		nats.MaxReconnects(-1), // infinite retries
-	)
-	s.Require().NoError(err)
-}
-
-// TearDownSuite runs once after all tests in the suite
-func (s *NATSSuite) TearDownSuite() {
-	if s.natsClient != nil {
-		s.natsClient.Close()
-	}
-	if s.natsServer != nil {
-		s.natsServer.Shutdown()
-	}
-}
-
-// SetupTest runs before each individual test
-func (s *NATSSuite) SetupTest() {
-	s.resetPackageVariables()
-	s.resetTestAddresses()
-
-	// Clean up any previous nats subscription
-	if s.natsSubscription != nil && s.natsSubscription.IsValid() {
-		s.natsSubscription.Unsubscribe()
-		s.natsSubscription = nil
-	}
-}
-
-func (s *NATSSuite) resetPackageVariables() {
-	natsMutex.Lock()
-	defer natsMutex.Unlock()
-	err := cleanupSubscription()
-	s.Require().NoError(err)
-
-	if natsConn != nil {
-		natsConn.Close()
-		natsConn = nil
-	}
-
-	if stopLoggingFunc != nil {
-		stopLoggingFunc()
-		stopLoggingFunc = nil
-	}
-
-	natsOptions = nil
-	addressHandler = nil
-	contractAddressHandler = nil
-}
-
-func (s *NATSSuite) resetTestAddresses() {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	s.addresses = nil
-	s.contractAddresses = nil
-}
-
-// setupAddressListResponder sets up a NATS subscription to respond to address list requests with the given addresses
-func (s *NATSSuite) setupAddressListResponder(addresses []AddressIdentifier) {
-	natsSubscription, err := s.natsClient.Subscribe(
-		SubjectAddressListRequest,
-		func(msg *nats.Msg) {
-			response, err := json.Marshal(addresses)
-			if err != nil {
-				s.T().Logf("Failed to marshal address list in nats message handler: %v", err)
-				return
-			}
-			if err := msg.Respond(response); err != nil {
-				s.T().Logf("Failed to respond in nats message handler: %v", err)
-				return
-			}
-		},
-	)
-	s.Require().NoError(err)
-	s.natsSubscription = natsSubscription
-}
-
-// Helper method to initialize NATS with standard setup
-func (s *NATSSuite) initNATSWithHandlers(addresses []AddressIdentifier) {
-	s.setupAddressListResponder(addresses)
-
-	options := &NATSOptions{URL: s.natsServerURL}
-
-	addressHandler := func(address common.Address) error {
-		s.lock.Lock()
-		defer s.lock.Unlock()
-		s.addresses = append(s.addresses, address)
-		return nil
-	}
-
-	contractAddressHandler := func(address common.Address) error {
-		s.lock.Lock()
-		defer s.lock.Unlock()
-		s.contractAddresses = append(s.contractAddresses, address)
-		return nil
-	}
-
-	err := InitNATS(
-		s.Suite.T().Context(),
-		options,
-		addressHandler,
-		contractAddressHandler,
-	)
-	s.Require().NoError(err)
-
-	time.Sleep(1 * time.Second)
-
-	s.Require().True(isNATSConnected())
-	s.Require().True(hasNATSSubscription())
+	timeout time.Duration
 }
 
 func (s *NATSSuite) TestCloseNATS() {
@@ -266,35 +141,29 @@ func (s *NATSSuite) TestPublishSerializable_Concurrent() {
 	err = group.Wait()
 	s.Require().NoError(err)
 
-	timer := time.NewTimer(5 * time.Second)
-	defer timer.Stop()
-	ticker := time.NewTicker(5 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
+	// Wait for all messages to be received
+	expectedCount := int(transactionID.Load())
+	s.waitForCondition(
+		func() bool {
 			receivedMessagesMutex.Lock()
 			defer receivedMessagesMutex.Unlock()
-			receivedCount := len(receivedMessages)
+			return len(receivedMessages) == expectedCount
+		},
+		"all messages should be received",
+	)
 
-			if receivedCount == int(transactionID.Load()) {
-				transactionIDSet := make(map[string]bool)
-				for _, msg := range receivedMessages {
-					transactionIDSet[msg.Data.TxId] = true
-				}
+	// Validate message content
+	receivedMessagesMutex.Lock()
+	defer receivedMessagesMutex.Unlock()
 
-				for i := range int(transactionID.Load()) {
-					expectedID := fmt.Sprintf("%d", i+1)
-					s.Require().True(transactionIDSet[expectedID])
-				}
+	transactionIDSet := make(map[string]bool)
+	for _, msg := range receivedMessages {
+		transactionIDSet[msg.Data.TxId] = true
+	}
 
-				return
-			}
-		case <-timer.C:
-			s.Fail("Timeout waiting for messages")
-			return
-		}
+	for i := range expectedCount {
+		expectedID := fmt.Sprintf("%d", i+1)
+		s.Require().True(transactionIDSet[expectedID])
 	}
 }
 
@@ -330,7 +199,12 @@ func (s *NATSSuite) TestPublishSerializable_OK() {
 	err = PublishSerializable(data)
 	s.Require().NoError(err)
 
-	time.Sleep(1 * time.Second)
+	// Wait for message to be received and processed
+	s.waitForCondition(func() bool {
+		lock.Lock()
+		defer lock.Unlock()
+		return dataReceived.Data.TxId != "" // Check if message was received
+	}, "message should be received")
 
 	lock.Lock()
 	defer lock.Unlock()
@@ -340,7 +214,7 @@ func (s *NATSSuite) TestPublishSerializable_OK() {
 func (s *NATSSuite) TestReconnect() {
 	s.initNATSWithHandlers([]AddressIdentifier{})
 
-	// Messaging works.
+	// Test initial messaging
 	addressIdentifier := AddressIdentifier{
 		Protocol: "ethereum",
 		Network:  "mainnet",
@@ -350,42 +224,201 @@ func (s *NATSSuite) TestReconnect() {
 	err := s.natsClient.Publish(SubjectAddressPublish, addressIdentifierBytes)
 	s.Require().NoError(err)
 
-	waitTime := 1 * time.Second
-	time.Sleep(waitTime)
-
-	s.lock.Lock()
-	s.Require().Len(s.addresses, 1)
-	s.Require().Len(s.contractAddresses, 1)
-	s.lock.Unlock()
+	// Wait for the first message to be processed
+	s.waitForCondition(
+		func() bool {
+			s.lock.Lock()
+			defer s.lock.Unlock()
+			return len(s.addresses) == 1 && len(s.contractAddresses) == 1
+		},
+		"first message should be processed",
+	)
 
 	s.natsServer.Shutdown()
 
-	time.Sleep(waitTime)
+	// Wait for disconnection to be detected
+	s.waitForCondition(
+		func() bool {
+			return !isNATSConnected()
+		},
+		"should detect disconnection",
+	)
 
-	// Restart server.
+	// Restart server
 	server, err := server.NewServer(s.natsServerOptions)
 	s.Require().NoError(err)
 
 	go server.Start()
 
-	s.Require().True(server.ReadyForConnections(5 * time.Second))
+	s.Require().True(server.ReadyForConnections(s.timeout))
 	s.natsServer = server
 
-	time.Sleep(waitTime)
+	// Wait for connection and subscription
+	s.waitForCondition(
+		func() bool {
+			return isNATSConnected() && hasNATSSubscription()
+		},
+		"should connect and subscribe",
+	)
 
-	s.Require().True(isNATSConnected())
-	s.Require().True(hasNATSSubscription())
-
-	// Messaging works after reconnection.
+	// Test messaging after reconnection
 	err = s.natsClient.Publish(SubjectAddressPublish, addressIdentifierBytes)
 	s.Require().NoError(err)
 
-	time.Sleep(waitTime)
+	// Wait for the second message to be processed
+	s.waitForCondition(
+		func() bool {
+			s.lock.Lock()
+			defer s.lock.Unlock()
+			return len(s.addresses) == 2 && len(s.contractAddresses) == 2
+		},
+		"second message should be processed after reconnection",
+	)
+}
 
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	s.Require().Len(s.addresses, 2)
-	s.Require().Len(s.contractAddresses, 2)
+// SetupSuite runs once before all tests in the suite
+func (s *NATSSuite) SetupSuite() {
+	s.timeout = 5 * time.Second
+
+	s.natsServerOptions = &server.Options{
+		Host:   "127.0.0.1",
+		Port:   -1, // random available port
+		NoLog:  true,
+		NoSigs: true,
+	}
+	server, err := server.NewServer(s.natsServerOptions)
+	s.Require().NoError(err)
+	go server.Start()
+	s.Require().True(server.ReadyForConnections(s.timeout))
+	s.natsServer = server
+	s.natsServerURL = server.ClientURL()
+
+	// Create client of the responder
+	s.natsClient, err = nats.Connect(
+		s.natsServerURL,
+		nats.MaxReconnects(-1), // infinite retries
+	)
+	s.Require().NoError(err)
+}
+
+// SetupTest runs before each individual test
+func (s *NATSSuite) SetupTest() {
+	s.resetPackageVariables()
+
+	// Reset tracked addresses
+	s.addresses = nil
+	s.contractAddresses = nil
+
+	// Clean up any previous nats subscription
+	if s.natsSubscription != nil && s.natsSubscription.IsValid() {
+		s.natsSubscription.Unsubscribe()
+		s.natsSubscription = nil
+	}
+}
+
+// TearDownSuite runs once after all tests in the suite
+func (s *NATSSuite) TearDownSuite() {
+	if s.natsClient != nil {
+		s.natsClient.Close()
+	}
+	if s.natsServer != nil {
+		s.natsServer.Shutdown()
+	}
+}
+
+// Helper method to initialize NATS with standard setup
+func (s *NATSSuite) initNATSWithHandlers(addresses []AddressIdentifier) {
+	s.setupAddressListResponder(addresses)
+
+	options := &NATSOptions{URL: s.natsServerURL}
+
+	addressHandler := func(address common.Address) error {
+		s.lock.Lock()
+		defer s.lock.Unlock()
+		s.addresses = append(s.addresses, address)
+		return nil
+	}
+
+	contractAddressHandler := func(address common.Address) error {
+		s.lock.Lock()
+		defer s.lock.Unlock()
+		s.contractAddresses = append(s.contractAddresses, address)
+		return nil
+	}
+
+	err := InitNATS(
+		s.Suite.T().Context(),
+		options,
+		addressHandler,
+		contractAddressHandler,
+	)
+	s.Require().NoError(err)
+
+	// Wait for connection and subscription to be established
+	s.waitForCondition(func() bool {
+		return isNATSConnected() && hasNATSSubscription()
+	}, "NATS should connect and subscribe")
+}
+
+func (s *NATSSuite) resetPackageVariables() {
+	natsMutex.Lock()
+	defer natsMutex.Unlock()
+	err := cleanupSubscription()
+	s.Require().NoError(err)
+
+	if natsConn != nil {
+		natsConn.Close()
+		natsConn = nil
+	}
+
+	if stopLoggingFunc != nil {
+		stopLoggingFunc()
+		stopLoggingFunc = nil
+	}
+
+	natsOptions = nil
+	addressHandler = nil
+	contractAddressHandler = nil
+}
+
+// setupAddressListResponder sets up a NATS subscription to respond to address list requests with the given addresses
+func (s *NATSSuite) setupAddressListResponder(addresses []AddressIdentifier) {
+	natsSubscription, err := s.natsClient.Subscribe(
+		SubjectAddressListRequest,
+		func(msg *nats.Msg) {
+			response, err := json.Marshal(addresses)
+			if err != nil {
+				s.T().Logf("Failed to marshal address list in nats message handler: %v", err)
+				return
+			}
+			if err := msg.Respond(response); err != nil {
+				s.T().Logf("Failed to respond in nats message handler: %v", err)
+				return
+			}
+		},
+	)
+	s.Require().NoError(err)
+	s.natsSubscription = natsSubscription
+}
+
+// waitForCondition polls a condition with timeout
+func (s *NATSSuite) waitForCondition(condition func() bool, expectation string) {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	timeout := time.NewTimer(s.timeout)
+	defer timeout.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if condition() {
+				return
+			}
+		case <-timeout.C:
+			s.Require().Fail("timeout waiting for condition: " + expectation)
+		}
+	}
 }
 
 // hasNATSSubscription checks if NATS subscription is valid
