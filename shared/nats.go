@@ -265,8 +265,20 @@ func requestAddressList(ctx context.Context) error {
 		return errors.New("not connected to nats server")
 	}
 
+	// Prepare request payload including desired chain hints
+	type addressListQuery struct {
+		ChainID int64 `json:"chain_id,omitempty"`
+	}
+
+	query := addressListQuery{}
+	if ChainID != nil {
+		query.ChainID = ChainID.Int64()
+	}
+
+	payload, _ := json.Marshal(query)
+
 	// Send request with timeout context
-	msg, err := natsConn.RequestWithContext(ctx, SubjectAddressListRequest, nil)
+	msg, err := natsConn.RequestWithContext(ctx, SubjectAddressListRequest, payload)
 	if err != nil {
 		return fmt.Errorf("failed to send request to NATS: %w", err)
 	}
@@ -318,6 +330,13 @@ func subscribeToAddress() error {
 				slog.Error("handling contract address", "error", err)
 				return
 			}
+
+			slog.Info(
+				"Monitored address registered",
+				"protocol", address.Protocol,
+				"network", address.Network,
+				"address", address.Address,
+			)
 		},
 	)
 	if err != nil {
