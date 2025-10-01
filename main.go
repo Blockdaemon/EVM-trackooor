@@ -180,6 +180,17 @@ var historicalCmd = &cobra.Command{
 
 		actions.InitActions(options.Actions)
 
+		// Initialize NATS so historical backfill can publish events
+		ctx := cmd.Context()
+		if err := shared.InitNATS(
+			ctx,
+			&options.NATS,
+			actions.AddAddressToMonitoredAddresses,
+			actions.AddContractAddressToMonitoredAddresses,
+		); err != nil {
+			log.Fatalf("failed to initialize NATS client: %v", err)
+		}
+
 		if shared.BlockTrackingRequired {
 			trackooor.GetPastBlocks()
 		} else {
@@ -204,6 +215,17 @@ var historicalEventsCmd = &cobra.Command{
 
 		actions.InitActions(options.Actions)
 
+		// Initialize NATS so historical backfill can publish events
+		ctx := cmd.Context()
+		if err := shared.InitNATS(
+			ctx,
+			&options.NATS,
+			actions.AddAddressToMonitoredAddresses,
+			actions.AddContractAddressToMonitoredAddresses,
+		); err != nil {
+			log.Fatalf("failed to initialize NATS client: %v", err)
+		}
+
 		trackooor.GetPastEventsSingle()
 	},
 }
@@ -223,6 +245,17 @@ var historicalBlocksCmd = &cobra.Command{
 		trackooor.SetupHistorical()
 
 		actions.InitActions(options.Actions)
+
+		// Initialize NATS so historical backfill can publish events
+		ctx := cmd.Context()
+		if err := shared.InitNATS(
+			ctx,
+			&options.NATS,
+			actions.AddAddressToMonitoredAddresses,
+			actions.AddContractAddressToMonitoredAddresses,
+		); err != nil {
+			log.Fatalf("failed to initialize NATS client: %v", err)
+		}
 
 		trackooor.GetPastBlocks()
 	},
