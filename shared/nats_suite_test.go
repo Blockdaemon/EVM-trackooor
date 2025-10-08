@@ -70,7 +70,6 @@ func (s *NATSSuite) TestInitNATS_Error() {
 		s.Suite.T().Context(),
 		&NATSOptions{URL: s.natsServerURL},
 		addressHandler,
-		addressHandler,
 	)
 	s.Require().Error(err)
 	s.Require().Contains(err.Error(), "failed to add address to monitored addresses")
@@ -339,18 +338,10 @@ func (s *NATSSuite) initNATSWithHandlers(addresses []AddressIdentifier) {
 		return nil
 	}
 
-	contractAddressHandler := func(address common.Address) error {
-		s.lock.Lock()
-		defer s.lock.Unlock()
-		s.contractAddresses = append(s.contractAddresses, address)
-		return nil
-	}
-
 	err := InitNATS(
 		s.Suite.T().Context(),
 		options,
 		addressHandler,
-		contractAddressHandler,
 	)
 	s.Require().NoError(err)
 
@@ -378,7 +369,6 @@ func (s *NATSSuite) resetPackageVariables() {
 
 	natsOptions = nil
 	addressHandler = nil
-	contractAddressHandler = nil
 }
 
 // setupAddressListResponder sets up a NATS subscription to respond to address list requests with the given addresses
