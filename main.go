@@ -142,7 +142,6 @@ var realtimeBlocksCmd = &cobra.Command{
 			ctx,
 			&options.NATS,
 			actions.AddAddressToMonitoredAddresses,
-			actions.AddContractAddressToMonitoredAddresses,
 		); err != nil {
 			return fmt.Errorf("Failed to initialize NATS client: %w", err)
 		}
@@ -180,6 +179,16 @@ var historicalCmd = &cobra.Command{
 
 		actions.InitActions(options.Actions)
 
+		// Initialize NATS so wallets can be received during historical processing
+		ctx := cmd.Context()
+		if err := shared.InitNATS(
+			ctx,
+			&options.NATS,
+			actions.AddAddressToMonitoredAddresses,
+		); err != nil {
+			shared.Warnf(slog.Default(), "Failed to initialize NATS client for historical: %v", err)
+		}
+
 		if shared.BlockTrackingRequired {
 			trackooor.GetPastBlocks()
 		} else {
@@ -204,6 +213,16 @@ var historicalEventsCmd = &cobra.Command{
 
 		actions.InitActions(options.Actions)
 
+		// Initialize NATS so wallets can be received during historical processing
+		ctx := cmd.Context()
+		if err := shared.InitNATS(
+			ctx,
+			&options.NATS,
+			actions.AddAddressToMonitoredAddresses,
+		); err != nil {
+			shared.Warnf(slog.Default(), "Failed to initialize NATS client for historical events: %v", err)
+		}
+
 		trackooor.GetPastEventsSingle()
 	},
 }
@@ -223,6 +242,16 @@ var historicalBlocksCmd = &cobra.Command{
 		trackooor.SetupHistorical()
 
 		actions.InitActions(options.Actions)
+
+		// Initialize NATS so wallets can be received during historical blocks processing
+		ctx := cmd.Context()
+		if err := shared.InitNATS(
+			ctx,
+			&options.NATS,
+			actions.AddAddressToMonitoredAddresses,
+		); err != nil {
+			shared.Warnf(slog.Default(), "Failed to initialize NATS client for historical blocks: %v", err)
+		}
 
 		trackooor.GetPastBlocks()
 	},

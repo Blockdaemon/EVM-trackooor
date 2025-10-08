@@ -27,6 +27,21 @@ var RpcURL string
 var Verbose bool
 var Options TrackooorOptions
 
+// When enabled, event subscriptions will use dual topic filters to monitor any
+// ERC20 transfers where either the sender (topic1) or receiver (topic2)
+// matches one of the registered wallet addresses. This allows server-side
+// filtering by the node without specifying token contract addresses.
+var UseDualTransferWalletFilters bool
+
+// Pre-encoded wallet addresses as 32-byte topic hashes for filtering
+// (left-padded address bytes). Populated at runtime based on configured
+// monitored wallet addresses.
+var FilterWalletTopics []common.Hash
+
+// Channel to notify when a new wallet address is added for server-side
+// wallet-topic ERC20 Transfer subscriptions.
+var NewWalletTopicChan chan common.Address
+
 // JSON data
 var EventSigs map[string]interface{} // from data file, maps hex string to event abi
 var FuncSigs map[string]interface{}  // from data file, maps hex string (func selector) to func abi
@@ -130,6 +145,7 @@ func init() {
 	// init maps
 	ERC20TokenInfos = make(map[common.Address]ERC20Info)
 	AddressTypeCache = make(map[common.Address]int)
+	NewWalletTopicChan = make(chan common.Address, 1024)
 }
 
 func Infof(logger *slog.Logger, format string, args ...any) {

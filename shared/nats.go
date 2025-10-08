@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,12 +21,12 @@ const (
 )
 
 var (
-	natsConn                               *nats.Conn
-	natsMutex                              sync.RWMutex
-	natsOptions                            *NATSOptions
-	subscription                           *nats.Subscription
-	addressHandler, contractAddressHandler AddressHandler
-	stopLoggingFunc                        func()
+	natsConn        *nats.Conn
+	natsMutex       sync.RWMutex
+	natsOptions     *NATSOptions
+	subscription    *nats.Subscription
+	addressHandler  AddressHandler
+	stopLoggingFunc func()
 )
 
 type (
@@ -68,7 +69,7 @@ func CloseNATS() error {
 func InitNATS(
 	ctx context.Context,
 	options *NATSOptions,
-	addressHandlerInput, contractAddressHandlerInput AddressHandler,
+	addressHandlerInput AddressHandler,
 ) error {
 	natsMutex.Lock()
 	defer natsMutex.Unlock()
@@ -85,11 +86,6 @@ func InitNATS(
 		return errors.New("address handler already set")
 	}
 	addressHandler = addressHandlerInput
-
-	if contractAddressHandler != nil {
-		return errors.New("contract address handler already set")
-	}
-	contractAddressHandler = contractAddressHandlerInput
 
 	natsOptions = options
 
@@ -125,6 +121,9 @@ func PublishSerializable(data any) error {
 	if err := natsConn.Flush(); err != nil {
 		return fmt.Errorf("failed to flush NATS connection: %w", err)
 	}
+
+	// Log publish event
+	slog.Info("Published to NATS", "subject", SubjectTransfer, "bytes", len(jsonData))
 
 	return nil
 }
@@ -277,31 +276,52 @@ func requestAddressList(ctx context.Context) error {
 
 	payload, _ := json.Marshal(query)
 
-	// Send request with timeout context
-	msg, err := natsConn.RequestWithContext(ctx, SubjectAddressListRequest, payload)
-	if err != nil {
+	// Backoff-and-retry when there are no responders
+	const (
+		maxAttempts      = 5
+		initialBackoffMs = 500
+	)
+	backoff := time.Duration(initialBackoffMs) * time.Millisecond
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// Send request with timeout context
+		msg, err := natsConn.RequestWithContext(ctx, SubjectAddressListRequest, payload)
+		if err == nil {
+			// Process the response
+			var addresses []AddressIdentifier
+			if unmarshalErr := json.Unmarshal(msg.Data, &addresses); unmarshalErr != nil {
+				return fmt.Errorf("failed to unmarshal addresses: %w", unmarshalErr)
+			}
+
+			slog.Info("Received addresses from NATS", "addresses", addresses)
+
+			for _, address := range addresses {
+				if handleErr := addressHandler(common.HexToAddress(address.Address)); handleErr != nil {
+					return fmt.Errorf("failed to add address to monitored addresses: %w", handleErr)
+				}
+			}
+			return nil
+		}
+
+		lastErr = err
+		// Retry only on no responders, otherwise return immediately
+		if errors.Is(err, nats.ErrNoResponders) || (err != nil && strings.Contains(err.Error(), "no responders")) {
+			slog.Warn("No NATS responders, backing off", "attempt", attempt, "max", maxAttempts, "backoff", backoff)
+			// Wait with context awareness
+			select {
+			case <-time.After(backoff):
+				backoff *= 2
+				continue
+			case <-ctx.Done():
+				return fmt.Errorf("context cancelled while waiting to retry NATS request: %w", ctx.Err())
+			}
+		}
+
 		return fmt.Errorf("failed to send request to NATS: %w", err)
 	}
 
-	// Process the response
-	var addresses []AddressIdentifier
-	if err := json.Unmarshal(msg.Data, &addresses); err != nil {
-		return fmt.Errorf("failed to unmarshal addresses: %w", err)
-	}
-
-	slog.Info("Received addresses from NATS", "addresses", addresses)
-
-	for _, address := range addresses {
-		if err := addressHandler(common.HexToAddress(address.Address)); err != nil {
-			return fmt.Errorf("failed to add address to monitored addresses: %w", err)
-		}
-
-		if err := contractAddressHandler(common.HexToAddress(address.Address)); err != nil {
-			return fmt.Errorf("failed to add contract address to monitored addresses: %w", err)
-		}
-	}
-
-	return nil
+	return fmt.Errorf("failed to send request to NATS after retries: %w", lastErr)
 }
 
 // subscribeToAddress subscribes to address addition and adds it to the monitored addresses.
@@ -323,11 +343,6 @@ func subscribeToAddress() error {
 
 			if err := addressHandler(common.HexToAddress(address.Address)); err != nil {
 				slog.Error("handling address", "error", err)
-				return
-			}
-
-			if err := contractAddressHandler(common.HexToAddress(address.Address)); err != nil {
-				slog.Error("handling contract address", "error", err)
 				return
 			}
 

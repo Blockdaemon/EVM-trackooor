@@ -21,38 +21,51 @@ var (
 	monitoredAddresses = mapset.NewSet[common.Address]()
 )
 
+// addressMatchesWalletTopics returns true if the given address matches any of
+// the wallet-topic filters (used when server-side topic filtering is enabled).
+func addressMatchesWalletTopics(addr common.Address) bool {
+	if len(shared.FilterWalletTopics) == 0 {
+		return false
+	}
+	hashed := common.BytesToHash(addr.Bytes())
+	for _, h := range shared.FilterWalletTopics {
+		if h == hashed {
+			return true
+		}
+	}
+	return false
+}
+
 func AddAddressToMonitoredAddresses(address common.Address) error {
 	addTxAddressAction(address, handleAddressTx)
 	monitoredAddresses.Add(address)
-	return nil
-}
 
-func AddContractAddressToMonitoredAddresses(contractAddress common.Address) error {
-	addAddressEventSigAction(
-		contractAddress,
-		eventSignatureTransfer,
-		handleTokenTransfer,
-	)
-	monitoredAddresses.Add(contractAddress)
+	// Notify the event listener to create wallet-topic ERC20 Transfer
+	// subscriptions for this new address (server-side filtering) and update
+	// filters immediately for blocks/historical.
+	shared.FilterWalletTopics = append(shared.FilterWalletTopics, common.BytesToHash(address.Bytes()))
+	shared.NewWalletTopicChan <- address
 	return nil
 }
 
 func (p action) InitMonitorTransfers() {
+	// Always enable wallet-topic ERC20 Transfer filtering (from/to)
+	shared.UseDualTransferWalletFilters = true
 	// monitor addresses for transactions
 	for _, address := range p.o.Addresses {
 		AddAddressToMonitoredAddresses(address)
 	}
 
-	// monitor erc20 token for transfer events
-	erc20TokenAddresses := p.o.CustomOptions["erc20-tokens"].([]any)
-	for _, erc20TokenAddress := range erc20TokenAddresses {
-		var (
-			erc20TokenAddressString = erc20TokenAddress.(string)
-			typedERC20TokenAddress  = common.HexToAddress(erc20TokenAddressString)
-		)
-
-		AddContractAddressToMonitoredAddresses(typedERC20TokenAddress)
+	// Build wallet-topic filters from configured addresses
+	var walletTopics []common.Hash
+	for _, addr := range p.o.Addresses {
+		walletTopics = append(walletTopics, common.BytesToHash(addr.Bytes()))
 	}
+	shared.FilterWalletTopics = walletTopics
+
+	// Monitor all ERC20 Transfer events globally; filter by monitored addresses in handler
+	addEventSigAction(eventSignatureTransfer, handleTokenTransfer)
+
 }
 
 // called when a tx is from/to monitored address
@@ -143,20 +156,52 @@ func handleAddressTx(tx ActionTxData) {
 
 // called when erc20 token we're tracking emits Transfer event
 func handleTokenTransfer(event ActionEventData) {
-	value := event.DecodedData["value"].(*big.Int)
+	// Defensive guards: fields may be missing or of unexpected types; skip if so
+	valueInterface, ok := event.DecodedData["value"]
+	if !ok || valueInterface == nil {
+		return
+	}
+	value, ok := valueInterface.(*big.Int)
+	if !ok || value == nil {
+		return
+	}
 	if value.Cmp(big.NewInt(0)) == 0 {
 		return
 	}
 
+	fromInterface, ok := event.DecodedTopics["from"]
+	if !ok || fromInterface == nil {
+		return
+	}
+	toInterface, ok := event.DecodedTopics["to"]
+	if !ok || toInterface == nil {
+		return
+	}
+	from, ok := fromInterface.(common.Address)
+	if !ok {
+		return
+	}
+	to, ok := toInterface.(common.Address)
+	if !ok {
+		return
+	}
+
 	var (
-		from            = event.DecodedTopics["from"].(common.Address)
-		to              = event.DecodedTopics["to"].(common.Address)
 		isFromMonitored = monitoredAddresses.Contains(from)
 		isToMonitored   = monitoredAddresses.Contains(to)
 	)
 
-	if !isFromMonitored && !isToMonitored {
-		return
+	// When using server-side wallet topic filtering, also treat matches to the
+	// configured wallet topics as monitored (even if monitoredAddresses hasn't
+	// been populated yet by NATS/config at this moment in time).
+	if shared.UseDualTransferWalletFilters {
+		if !(isFromMonitored || isToMonitored || addressMatchesWalletTopics(from) || addressMatchesWalletTopics(to)) {
+			return
+		}
+	} else {
+		if !isFromMonitored && !isToMonitored {
+			return
+		}
 	}
 
 	var (

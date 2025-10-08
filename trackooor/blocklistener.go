@@ -14,23 +14,67 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/schollz/progressbar/v3"
 )
 
 // handles all events emitted in a given block,
 func handleEventsFromBlock(block *types.Block, contracts []common.Address) {
-	// blockHash := block.Hash()
-	query := ethereum.FilterQuery{
-		// BlockHash: &blockHash,
-		FromBlock: block.Number(),
-		ToBlock:   block.Number(),
-		Addresses: contracts,
-		Topics:    shared.Options.FilterEventTopics,
+	// Only wallet-topic filtering when enabled; otherwise fallback to default query
+	var logs []types.Log
+	if !(shared.UseDualTransferWalletFilters && len(shared.FilterWalletTopics) > 0) {
+		query := ethereum.FilterQuery{
+			// BlockHash: &blockHash,
+			FromBlock: block.Number(),
+			ToBlock:   block.Number(),
+			Addresses: contracts,
+			Topics:    shared.Options.FilterEventTopics,
+		}
+		queriedLogs, err := shared.Client.FilterLogs(context.Background(), query)
+		if err != nil {
+			log.Fatal(err)
+		}
+		logs = append(logs, queriedLogs...)
 	}
-	logs, err := shared.Client.FilterLogs(context.Background(), query)
-	if err != nil {
-		log.Fatal(err)
+
+	// If configured, also query ERC20 Transfer events filtered by wallet topics
+	if shared.UseDualTransferWalletFilters && len(shared.FilterWalletTopics) > 0 {
+		// ToDo: Watch contract functions other than Transfer
+		transferTopic0 := []common.Hash{crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))}
+
+		fromQuery := ethereum.FilterQuery{
+			FromBlock: block.Number(),
+			ToBlock:   block.Number(),
+			Topics: [][]common.Hash{
+				transferTopic0,            // topic0 = Transfer
+				shared.FilterWalletTopics, // topic1 = from wallets
+			},
+		}
+		if shared.Verbose {
+			slog.Info("Block ERC20 FROM filter", "block", block.Number(), "topics", fromQuery.Topics)
+		}
+		fromLogs, err := shared.Client.FilterLogs(context.Background(), fromQuery)
+		if err == nil {
+			logs = append(logs, fromLogs...)
+		}
+
+		toQuery := ethereum.FilterQuery{
+			FromBlock: block.Number(),
+			ToBlock:   block.Number(),
+			Topics: [][]common.Hash{
+				transferTopic0,            // topic0 = Transfer
+				nil,                       // topic1 = any
+				shared.FilterWalletTopics, // topic2 = to wallets
+			},
+		}
+		if shared.Verbose {
+			slog.Info("Block ERC20 TO filter", "block", block.Number(), "topics", toQuery.Topics)
+		}
+		toLogs, err := shared.Client.FilterLogs(context.Background(), toQuery)
+		if err == nil {
+			logs = append(logs, toLogs...)
+		}
 	}
 
 	var bar *progressbar.ProgressBar
