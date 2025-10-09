@@ -2,6 +2,7 @@ package actions
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"math/big"
 	"time"
@@ -45,6 +46,8 @@ func AddAddressToMonitoredAddresses(address common.Address) error {
 	// filters immediately for blocks/historical.
 	shared.FilterWalletTopics = append(shared.FilterWalletTopics, common.BytesToHash(address.Bytes()))
 	shared.NewWalletTopicChan <- address
+	// Always print to console when a wallet address is added/updated
+	fmt.Printf("Monitored wallet address added: %s\n", address.Hex())
 	return nil
 }
 

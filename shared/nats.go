@@ -341,6 +341,9 @@ func subscribeToAddress() error {
 				return
 			}
 
+			// Always print to console when a wallet address is published via NATS
+			fmt.Printf("Published wallet address received: %s (protocol=%s, network=%s)\n", address.Address, address.Protocol, address.Network)
+
 			if err := addressHandler(common.HexToAddress(address.Address)); err != nil {
 				slog.Error("handling address", "error", err)
 				return
