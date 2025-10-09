@@ -278,7 +278,7 @@ func requestAddressList(ctx context.Context) error {
 
 	// Backoff-and-retry when there are no responders
 	const (
-		maxAttempts      = 5
+		maxAttempts      = 10
 		initialBackoffMs = 500
 	)
 	backoff := time.Duration(initialBackoffMs) * time.Millisecond
