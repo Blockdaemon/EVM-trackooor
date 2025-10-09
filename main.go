@@ -179,7 +179,7 @@ var historicalCmd = &cobra.Command{
 
 		actions.InitActions(options.Actions)
 
-		// Initialize NATS so wallets can be received during historical processing
+		// Initialize NATS so historical backfill can publish events
 		ctx := cmd.Context()
 		if err := shared.InitNATS(
 			ctx,
@@ -213,7 +213,7 @@ var historicalEventsCmd = &cobra.Command{
 
 		actions.InitActions(options.Actions)
 
-		// Initialize NATS so wallets can be received during historical processing
+		// Initialize NATS so historical backfill can publish events
 		ctx := cmd.Context()
 		if err := shared.InitNATS(
 			ctx,
@@ -243,7 +243,7 @@ var historicalBlocksCmd = &cobra.Command{
 
 		actions.InitActions(options.Actions)
 
-		// Initialize NATS so wallets can be received during historical blocks processing
+		// Initialize NATS so historical backfill can publish events
 		ctx := cmd.Context()
 		if err := shared.InitNATS(
 			ctx,
