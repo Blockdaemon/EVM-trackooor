@@ -22,6 +22,24 @@ var (
 	monitoredAddresses = mapset.NewSet[common.Address]()
 )
 
+// tryExtracting attempts to extract and type-assert a value from a map.
+// Returns the value and an error if the key doesn't exist or type assertion fails.
+func tryExtracting[T any](
+	source map[string]interface{},
+	valueName string,
+) (T, error) {
+	var value T
+	valueInterface, ok := source[valueName]
+	if !ok || valueInterface == nil {
+		return value, fmt.Errorf("missing value for %s", valueName)
+	}
+	value, ok = valueInterface.(T)
+	if !ok {
+		return value, fmt.Errorf("invalid type for %s", valueName)
+	}
+	return value, nil
+}
+
 // addressMatchesWalletTopics returns true if the given address matches any of
 // the wallet-topic filters (used when server-side topic filtering is enabled).
 func addressMatchesWalletTopics(addr common.Address) bool {
@@ -155,33 +173,19 @@ func handleAddressTx(tx ActionTxData) {
 
 // called when erc20 token we're tracking emits Transfer event
 func handleTokenTransfer(event ActionEventData) {
-	// Defensive guards: fields may be missing or of unexpected types; skip if so
-	valueInterface, ok := event.DecodedData["value"]
-	if !ok || valueInterface == nil {
-		return
-	}
-	value, ok := valueInterface.(*big.Int)
-	if !ok || value == nil {
-		return
-	}
-	if value.Cmp(big.NewInt(0)) == 0 {
+	// Extract and validate event fields
+	value, err := tryExtracting[*big.Int](event.DecodedData, "value")
+	if err != nil || value == nil || value.Cmp(big.NewInt(0)) == 0 {
 		return
 	}
 
-	fromInterface, ok := event.DecodedTopics["from"]
-	if !ok || fromInterface == nil {
+	from, err := tryExtracting[common.Address](event.DecodedTopics, "from")
+	if err != nil {
 		return
 	}
-	toInterface, ok := event.DecodedTopics["to"]
-	if !ok || toInterface == nil {
-		return
-	}
-	from, ok := fromInterface.(common.Address)
-	if !ok {
-		return
-	}
-	to, ok := toInterface.(common.Address)
-	if !ok {
+
+	to, err := tryExtracting[common.Address](event.DecodedTopics, "to")
+	if err != nil {
 		return
 	}
 
