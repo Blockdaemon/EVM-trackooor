@@ -21,7 +21,6 @@ import (
 
 // handles all events emitted in a given block,
 func handleEventsFromBlock(block *types.Block, contracts []common.Address) {
-	// Only wallet-topic filtering when enabled; otherwise fallback to default query
 	var logs []types.Log
 
 	// Make a copy of FilterWalletTopics to avoid holding the lock during network calls
@@ -31,26 +30,18 @@ func handleEventsFromBlock(block *types.Block, contracts []common.Address) {
 	hasWalletTopics := len(shared.FilterWalletTopics) > 0
 	shared.FilterWalletTopicsMutex.RUnlock()
 
-	if !(shared.UseDualTransferWalletFilters && hasWalletTopics) {
-		query := ethereum.FilterQuery{
-			// BlockHash: &blockHash,
-			FromBlock: block.Number(),
-			ToBlock:   block.Number(),
-			Addresses: contracts,
-			Topics:    shared.Options.FilterEventTopics,
-		}
-		queriedLogs, err := shared.Client.FilterLogs(context.Background(), query)
-		if err != nil {
-			log.Fatal(err)
-		}
-		logs = append(logs, queriedLogs...)
-	}
-
-	// If configured, also query ERC20 Transfer events filtered by wallet topics
+	// Use wallet-topic filtering when enabled, otherwise fallback to contract-based filtering
 	if shared.UseDualTransferWalletFilters && hasWalletTopics {
-		// ToDo: Watch contract functions other than Transfer
-		transferTopic0 := []common.Hash{crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))}
+		// Monitor by wallet addresses using ERC20 Transfer event topic filtering
+		// This allows server-side filtering without specifying token contract addresses
 
+		// Determine the Keccak-256 hash of the event signature.
+		// This will be the first topic in our filter query.
+		eventSignature := "Transfer(address,address,uint256)"
+		topic0 := crypto.Keccak256Hash([]byte(eventSignature))
+		transferTopic0 := []common.Hash{topic0}
+
+		// Query for transfers FROM monitored wallets
 		fromQuery := ethereum.FilterQuery{
 			FromBlock: block.Number(),
 			ToBlock:   block.Number(),
@@ -67,6 +58,7 @@ func handleEventsFromBlock(block *types.Block, contracts []common.Address) {
 			logs = append(logs, fromLogs...)
 		}
 
+		// Query for transfers TO monitored wallets
 		toQuery := ethereum.FilterQuery{
 			FromBlock: block.Number(),
 			ToBlock:   block.Number(),
@@ -83,6 +75,19 @@ func handleEventsFromBlock(block *types.Block, contracts []common.Address) {
 		if err == nil {
 			logs = append(logs, toLogs...)
 		}
+	} else {
+		// Fallback: Monitor by contract addresses
+		query := ethereum.FilterQuery{
+			FromBlock: block.Number(),
+			ToBlock:   block.Number(),
+			Addresses: contracts,
+			Topics:    shared.Options.FilterEventTopics,
+		}
+		queriedLogs, err := shared.Client.FilterLogs(context.Background(), query)
+		if err != nil {
+			log.Fatal(err)
+		}
+		logs = append(logs, queriedLogs...)
 	}
 
 	var bar *progressbar.ProgressBar
