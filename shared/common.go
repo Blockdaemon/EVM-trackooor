@@ -37,6 +37,7 @@ var UseDualTransferWalletFilters bool
 // (left-padded address bytes). Populated at runtime based on configured
 // monitored wallet addresses.
 var FilterWalletTopics []common.Hash
+var FilterWalletTopicsMutex sync.RWMutex
 
 // Channel to notify when a new wallet address is added for server-side
 // wallet-topic ERC20 Transfer subscriptions.

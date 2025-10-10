@@ -25,6 +25,9 @@ var (
 // addressMatchesWalletTopics returns true if the given address matches any of
 // the wallet-topic filters (used when server-side topic filtering is enabled).
 func addressMatchesWalletTopics(addr common.Address) bool {
+	shared.FilterWalletTopicsMutex.RLock()
+	defer shared.FilterWalletTopicsMutex.RUnlock()
+
 	if len(shared.FilterWalletTopics) == 0 {
 		return false
 	}
@@ -44,8 +47,10 @@ func AddAddressToMonitoredAddresses(address common.Address) error {
 	// Notify the event listener to create wallet-topic ERC20 Transfer
 	// subscriptions for this new address (server-side filtering) and update
 	// filters immediately for blocks/historical.
+	shared.FilterWalletTopicsMutex.Lock()
 	shared.FilterWalletTopics = append(shared.FilterWalletTopics, common.BytesToHash(address.Bytes()))
-	shared.NewWalletTopicChan <- address
+	shared.FilterWalletTopicsMutex.Unlock()
+
 	// Always print to console when a wallet address is added/updated
 	fmt.Printf("Monitored wallet address added: %s\n", address.Hex())
 	return nil
@@ -54,21 +59,12 @@ func AddAddressToMonitoredAddresses(address common.Address) error {
 func (p action) InitMonitorTransfers() {
 	// Always enable wallet-topic ERC20 Transfer filtering (from/to)
 	shared.UseDualTransferWalletFilters = true
-	// monitor addresses for transactions
-	for _, address := range p.o.Addresses {
-		AddAddressToMonitoredAddresses(address)
-	}
 
-	// Build wallet-topic filters from configured addresses
-	var walletTopics []common.Hash
-	for _, addr := range p.o.Addresses {
-		walletTopics = append(walletTopics, common.BytesToHash(addr.Bytes()))
-	}
-	shared.FilterWalletTopics = walletTopics
+	// Addresses are dynamically added via NATS using AddAddressToMonitoredAddresses()
+	// No need to read from config "addresses": {} field
 
 	// Monitor all ERC20 Transfer events globally; filter by monitored addresses in handler
 	addEventSigAction(eventSignatureTransfer, handleTokenTransfer)
-
 }
 
 // called when a tx is from/to monitored address

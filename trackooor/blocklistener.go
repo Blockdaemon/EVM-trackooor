@@ -23,7 +23,15 @@ import (
 func handleEventsFromBlock(block *types.Block, contracts []common.Address) {
 	// Only wallet-topic filtering when enabled; otherwise fallback to default query
 	var logs []types.Log
-	if !(shared.UseDualTransferWalletFilters && len(shared.FilterWalletTopics) > 0) {
+
+	// Make a copy of FilterWalletTopics to avoid holding the lock during network calls
+	shared.FilterWalletTopicsMutex.RLock()
+	walletTopicsCopy := make([]common.Hash, len(shared.FilterWalletTopics))
+	copy(walletTopicsCopy, shared.FilterWalletTopics)
+	hasWalletTopics := len(shared.FilterWalletTopics) > 0
+	shared.FilterWalletTopicsMutex.RUnlock()
+
+	if !(shared.UseDualTransferWalletFilters && hasWalletTopics) {
 		query := ethereum.FilterQuery{
 			// BlockHash: &blockHash,
 			FromBlock: block.Number(),
@@ -39,7 +47,7 @@ func handleEventsFromBlock(block *types.Block, contracts []common.Address) {
 	}
 
 	// If configured, also query ERC20 Transfer events filtered by wallet topics
-	if shared.UseDualTransferWalletFilters && len(shared.FilterWalletTopics) > 0 {
+	if shared.UseDualTransferWalletFilters && hasWalletTopics {
 		// ToDo: Watch contract functions other than Transfer
 		transferTopic0 := []common.Hash{crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))}
 
@@ -47,8 +55,8 @@ func handleEventsFromBlock(block *types.Block, contracts []common.Address) {
 			FromBlock: block.Number(),
 			ToBlock:   block.Number(),
 			Topics: [][]common.Hash{
-				transferTopic0,            // topic0 = Transfer
-				shared.FilterWalletTopics, // topic1 = from wallets
+				transferTopic0,   // topic0 = Transfer
+				walletTopicsCopy, // topic1 = from wallets
 			},
 		}
 		if shared.Verbose {
@@ -63,9 +71,9 @@ func handleEventsFromBlock(block *types.Block, contracts []common.Address) {
 			FromBlock: block.Number(),
 			ToBlock:   block.Number(),
 			Topics: [][]common.Hash{
-				transferTopic0,            // topic0 = Transfer
-				nil,                       // topic1 = any
-				shared.FilterWalletTopics, // topic2 = to wallets
+				transferTopic0,   // topic0 = Transfer
+				nil,              // topic1 = any
+				walletTopicsCopy, // topic2 = to wallets
 			},
 		}
 		if shared.Verbose {
