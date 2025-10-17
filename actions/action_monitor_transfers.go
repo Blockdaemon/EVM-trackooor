@@ -43,19 +43,8 @@ func tryExtracting[T any](
 // addressMatchesWalletTopics returns true if the given address matches any of
 // the wallet-topic filters (used when server-side topic filtering is enabled).
 func addressMatchesWalletTopics(addr common.Address) bool {
-	shared.FilterWalletTopicsMutex.RLock()
-	defer shared.FilterWalletTopicsMutex.RUnlock()
-
-	if len(shared.FilterWalletTopics) == 0 {
-		return false
-	}
 	hashed := common.BytesToHash(addr.Bytes())
-	for _, h := range shared.FilterWalletTopics {
-		if h == hashed {
-			return true
-		}
-	}
-	return false
+	return shared.MonitoredAddressHashes().Contains(hashed)
 }
 
 func AddAddressToMonitoredAddresses(address common.Address) error {
@@ -65,9 +54,7 @@ func AddAddressToMonitoredAddresses(address common.Address) error {
 	// Notify the event listener to create wallet-topic ERC20 Transfer
 	// subscriptions for this new address (server-side filtering) and update
 	// filters immediately for blocks/historical.
-	shared.FilterWalletTopicsMutex.Lock()
-	shared.FilterWalletTopics = append(shared.FilterWalletTopics, common.BytesToHash(address.Bytes()))
-	shared.FilterWalletTopicsMutex.Unlock()
+	shared.MonitoredAddressHashes().Add(common.BytesToHash(address.Bytes()))
 
 	// Always print to console when a wallet address is added/updated
 	fmt.Printf("Monitored wallet address added: %s\n", address.Hex())

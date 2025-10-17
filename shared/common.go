@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -36,8 +37,7 @@ var UseDualTransferWalletFilters bool
 // Pre-encoded wallet addresses as 32-byte topic hashes for filtering
 // (left-padded address bytes). Populated at runtime based on configured
 // monitored wallet addresses.
-var FilterWalletTopics []common.Hash
-var FilterWalletTopicsMutex sync.RWMutex
+var monitoredAddressHashes = mapset.NewSet[common.Hash]()
 
 // Channel to notify when a new wallet address is added for server-side
 // wallet-topic ERC20 Transfer subscriptions.
@@ -147,6 +147,11 @@ func init() {
 	ERC20TokenInfos = make(map[common.Address]ERC20Info)
 	AddressTypeCache = make(map[common.Address]int)
 	NewWalletTopicChan = make(chan common.Address, 1024)
+}
+
+// MonitoredAddressHashes returns the thread-safe set of monitored address hashes.
+func MonitoredAddressHashes() mapset.Set[common.Hash] {
+	return monitoredAddressHashes
 }
 
 func Infof(logger *slog.Logger, format string, args ...any) {

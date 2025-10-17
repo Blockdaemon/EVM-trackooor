@@ -23,12 +23,9 @@ import (
 func handleEventsFromBlock(block *types.Block, contracts []common.Address) {
 	var logs []types.Log
 
-	// Make a copy of FilterWalletTopics to avoid holding the lock during network calls
-	shared.FilterWalletTopicsMutex.RLock()
-	walletTopicsCopy := make([]common.Hash, len(shared.FilterWalletTopics))
-	copy(walletTopicsCopy, shared.FilterWalletTopics)
-	hasWalletTopics := len(shared.FilterWalletTopics) > 0
-	shared.FilterWalletTopicsMutex.RUnlock()
+	// Get a snapshot of monitored address hashes to avoid lock contention during network calls
+	walletTopicsCopy := shared.MonitoredAddressHashes().ToSlice()
+	hasWalletTopics := len(walletTopicsCopy) > 0
 
 	// Use wallet-topic filtering when enabled, otherwise fallback to contract-based filtering
 	if shared.UseDualTransferWalletFilters && hasWalletTopics {
