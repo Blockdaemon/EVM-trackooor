@@ -154,6 +154,15 @@ func handleTokenTransfer(event ActionEventData) {
 		return
 	}
 
+	// derive status from receipt if available (logs usually imply success, but be explicit)
+	if receipt, err := shared.Client.TransactionReceipt(context.Background(), event.EventLog.TxHash); err == nil {
+		if receipt.Status == 1 {
+			event.Status = StatusSuccess
+		} else {
+			event.Status = StatusFailure
+		}
+	}
+
 	var (
 		from            = event.DecodedTopics["from"].(common.Address)
 		to              = event.DecodedTopics["to"].(common.Address)
