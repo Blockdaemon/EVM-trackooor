@@ -42,10 +42,12 @@ func doEventPostProcessing(vLog types.Log) {
 			EventFields:   eventFields,
 			DecodedTopics: decodedTopics,
 			DecodedData:   decodedData,
+			Status:        actions.StatusSuccess,
 		}
 	} else {
 		actionEventData = actions.ActionEventData{
 			EventLog: vLog,
+			Status:   actions.StatusSuccess,
 		}
 	}
 

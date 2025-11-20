@@ -1,7 +1,6 @@
 package actions
 
 import (
-	"context"
 	"fmt"
 	"math/big"
 	"time"
@@ -148,14 +147,10 @@ func (eventData *ActionEventData) ToTransactionLog() webhook.WebhookMessageUnifi
 	// Create tx hash string
 	txHash := eventData.EventLog.TxHash.String()
 
-	// derive status from receipt if available (logs usually imply success, but be explicit)
-	status := StatusSuccess
-	if receipt, err := shared.Client.TransactionReceipt(context.Background(), eventData.EventLog.TxHash); err == nil {
-		if receipt.Status == 1 {
-			status = StatusSuccess
-		} else {
-			status = StatusFailure
-		}
+	// derive status from eventData if set, otherwise default to success
+	status := eventData.Status
+	if status == "" {
+		status = StatusSuccess
 	}
 
 	// Create transfer data from the event

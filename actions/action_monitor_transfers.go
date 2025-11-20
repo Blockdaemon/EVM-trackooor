@@ -85,8 +85,6 @@ func handleAddressTx(tx ActionTxData) {
 
 	// Convert to transfer webhook format and publish
 	webhookData := tx.ToTransaction()
-
-	// Publish to NATS
 	if err := shared.PublishSerializable(webhookData); err != nil {
 		slog.Error("Failed to publish webhook data", "error", err)
 		return

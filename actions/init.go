@@ -23,6 +23,7 @@ type ActionEventData struct {
 	EventFields   shared.EventFields
 	DecodedTopics map[string]interface{}
 	DecodedData   map[string]interface{}
+	Status        string
 }
 
 type ActionTxData struct {
