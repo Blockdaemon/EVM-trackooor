@@ -30,6 +30,7 @@ type ActionTxData struct {
 	From        *common.Address
 	To          *common.Address
 	Block       *types.Block // block which the tx was in
+	Status      string
 }
 
 type ActionBlockData struct {
