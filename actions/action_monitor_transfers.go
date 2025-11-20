@@ -60,25 +60,31 @@ func handleAddressTx(tx ActionTxData) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if tx.To == nil { // contract creation
-		receipt, err := shared.Client.TransactionReceipt(ctx, tx.Transaction.Hash())
-		if err != nil {
-			slog.Error("Failed to get transaction receipt", "hash", tx.Transaction.Hash(), "error", err)
-			return
-		}
-
+	// fetch receipt to determine status and (if needed) deployed contract address
+	receipt, err := shared.Client.TransactionReceipt(ctx, tx.Transaction.Hash())
+	if err != nil {
+		slog.Error("Failed to get transaction receipt", "hash", tx.Transaction.Hash(), "error", err)
+		return
+	}
+	if receipt.Status == 1 {
+		tx.Status = StatusSuccess
+	} else {
+		tx.Status = StatusFailure
+	}
+	// set deployed contract address if contract creation
+	if tx.To == nil {
 		tx.To = &receipt.ContractAddress
 	}
 
 	var (
 		from            = *tx.From
 		to              = *tx.To
-		webhookData     = tx.ToTransaction()
 		isFromMonitored = monitoredAddresses.Contains(from)
 		isToMonitored   = monitoredAddresses.Contains(to)
 	)
 
-	// Publish to NATS
+	// Convert to transfer webhook format and publish
+	webhookData := tx.ToTransaction()
 	if err := shared.PublishSerializable(webhookData); err != nil {
 		slog.Error("Failed to publish webhook data", "error", err)
 		return
@@ -146,6 +152,15 @@ func handleTokenTransfer(event ActionEventData) {
 	value := event.DecodedData["value"].(*big.Int)
 	if value.Cmp(big.NewInt(0)) == 0 {
 		return
+	}
+
+	// derive status from receipt if available (logs usually imply success, but be explicit)
+	if receipt, err := shared.Client.TransactionReceipt(context.Background(), event.EventLog.TxHash); err == nil {
+		if receipt.Status == 1 {
+			event.Status = StatusSuccess
+		} else {
+			event.Status = StatusFailure
+		}
 	}
 
 	var (

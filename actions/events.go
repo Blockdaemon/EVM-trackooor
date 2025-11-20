@@ -18,6 +18,7 @@ const (
 	EventTypeBalance        = "unified_confirmed_balance"
 	ProtocolEthereum        = "ethereum"
 	StatusSuccess           = "success"
+	StatusFailure           = "failed"
 )
 
 var networkMap = map[string]string{
@@ -43,6 +44,12 @@ func (txData *ActionTxData) ToSourceBalance(balance *big.Int) webhook.WebhookMes
 func (txData *ActionTxData) ToTransaction() webhook.WebhookMessageUnifiedConfirmedTxRequest {
 	// Create tx hash string
 	txHash := txData.Transaction.Hash().String()
+
+	// derive status from txData if set, otherwise default to success
+	status := txData.Status
+	if status == "" {
+		status = StatusSuccess
+	}
 
 	// Create transfer data for native ETH transfer
 	var transfers []webhook.Transfer
@@ -86,7 +93,7 @@ func (txData *ActionTxData) ToTransaction() webhook.WebhookMessageUnifiedConfirm
 			BlockHash:   txData.Block.Hash().String(),
 			BlockNumber: txData.Block.Number().Uint64(),
 			Fee:         nil,
-			Status:      StatusSuccess,
+			Status:      status,
 			Timestamp:   uint64(txData.Block.Time()),
 			Transfers:   transfers,
 			TxHash:      &txHash,
@@ -140,6 +147,12 @@ func (eventData *ActionEventData) ToTransactionLog() webhook.WebhookMessageUnifi
 	// Create tx hash string
 	txHash := eventData.EventLog.TxHash.String()
 
+	// derive status from eventData if set, otherwise default to success
+	status := eventData.Status
+	if status == "" {
+		status = StatusSuccess
+	}
+
 	// Create transfer data from the event
 	var transfers []webhook.Transfer
 
@@ -169,7 +182,7 @@ func (eventData *ActionEventData) ToTransactionLog() webhook.WebhookMessageUnifi
 		Data: webhook.WebhookMessageUnifiedConfirmedTxLogData{
 			BlockHash:   eventData.EventLog.BlockHash.String(),
 			BlockNumber: eventData.EventLog.BlockNumber,
-			Status:      StatusSuccess,
+			Status:      status,
 			Timestamp:   uint64(time.Now().Unix()), // Current time as we don't have block time in log
 			Transfers:   transfers,
 			TxHash:      &txHash,

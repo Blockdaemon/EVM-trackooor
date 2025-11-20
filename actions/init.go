@@ -23,6 +23,7 @@ type ActionEventData struct {
 	EventFields   shared.EventFields
 	DecodedTopics map[string]interface{}
 	DecodedData   map[string]interface{}
+	Status        string
 }
 
 type ActionTxData struct {
@@ -30,6 +31,7 @@ type ActionTxData struct {
 	From        *common.Address
 	To          *common.Address
 	Block       *types.Block // block which the tx was in
+	Status      string
 }
 
 type ActionBlockData struct {
