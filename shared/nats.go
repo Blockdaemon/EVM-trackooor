@@ -2,10 +2,13 @@ package shared
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -186,18 +189,35 @@ func connectToNATS() error {
 		}
 	}
 
-	var err error
-	natsConn, err = nats.Connect(
-		natsOptions.URL,
-		nats.UserInfo(natsOptions.User, natsOptions.Password),
-		nats.Timeout(10*time.Second),
+	// Build TLS configuration if mTLS is configured
+	tlsConfig, err := getTLSConfig(natsOptions)
+	if err != nil {
+		return fmt.Errorf("failed to get TLS config: %w", err)
+	}
+
+	// Build NATS connection options
+	options := []nats.Option{
+		nats.Timeout(10 * time.Second),
 		nats.RetryOnFailedConnect(true),
-		nats.MaxReconnects(-1),            // infinite retries
-		nats.ReconnectWait(1*time.Second), // wait time between reconnection attempts
+		nats.MaxReconnects(-1),              // infinite retries
+		nats.ReconnectWait(1 * time.Second), // wait time between reconnection attempts
 		nats.DisconnectErrHandler(disconnectedHandler),
 		nats.ReconnectHandler(reconnectHandler),
 		nats.ConnectHandler(connectHandler),
-	)
+	}
+
+	// Add authentication options
+	if natsOptions.User != "" || natsOptions.Password != "" {
+		options = append(options, nats.UserInfo(natsOptions.User, natsOptions.Password))
+	}
+
+	// Add TLS configuration if provided
+	if tlsConfig != nil {
+		options = append(options, nats.Secure(tlsConfig))
+		slog.Info("mTLS enabled for NATS connection")
+	}
+
+	natsConn, err = nats.Connect(natsOptions.URL, options...)
 	if err != nil {
 		return fmt.Errorf("failed to connect to NATS: %w", err)
 	}
@@ -256,6 +276,60 @@ func logStats(natsConn *nats.Conn, interval time.Duration) func() {
 			},
 		)
 	}
+}
+
+// getTLSConfig builds TLS configuration from NATS options if mTLS is configured
+func getTLSConfig(options *NATSOptions) (*tls.Config, error) {
+	// Check if any mTLS field is set
+	hasCert := options.ClientCertificateFile != ""
+	hasKey := options.ClientCertificateKeyFile != ""
+	hasCA := options.CABundleFile != ""
+
+	// No mTLS configured
+	if !hasCert && !hasKey && !hasCA {
+		return nil, nil
+	}
+
+	// All three must be set together
+	if !(hasCert && hasKey && hasCA) {
+		return nil, fmt.Errorf("incomplete mTLS configuration: all three fields (ClientCertificateFile, ClientCertificateKeyFile, CABundleFile) must be set together")
+	}
+
+	// Base TLS configuration with secure defaults
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		MaxVersion: tls.VersionTLS13,
+		CipherSuites: []uint16{
+			tls.TLS_CHACHA20_POLY1305_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+		},
+	}
+
+	// Load client certificate
+	cert, err := tls.LoadX509KeyPair(options.ClientCertificateFile, options.ClientCertificateKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load client certificate: %w", err)
+	}
+	tlsConfig.Certificates = []tls.Certificate{cert}
+	slog.Info("Loaded client certificate for mTLS", "cert_file", options.ClientCertificateFile)
+
+	// Load CA bundle
+	caBundle, err := os.ReadFile(options.CABundleFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read CA bundle file: %w", err)
+	}
+
+	certPool := x509.NewCertPool()
+	if !certPool.AppendCertsFromPEM(caBundle) {
+		return nil, fmt.Errorf("failed to parse CA bundle")
+	}
+	tlsConfig.RootCAs = certPool
+	slog.Info("Loaded CA bundle for mTLS", "ca_file", options.CABundleFile)
+
+	return tlsConfig, nil
 }
 
 // requestAddressList requests the latest list of addresses from NATS and adds them to the monitored addresses

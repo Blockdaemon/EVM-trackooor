@@ -108,6 +108,11 @@ type NATSOptions struct {
 	URL      string `json:"url"`
 	User     string `json:"user"`
 	Password string `json:"password"`
+
+	// mTLS configuration
+	ClientCertificateFile    string `json:"client_certificate_file,omitempty"`
+	ClientCertificateKeyFile string `json:"client_certificate_key_file,omitempty"`
+	CABundleFile             string `json:"c_a_bundle_file,omitempty"`
 }
 
 // already processed blocks, txs or events

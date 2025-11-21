@@ -1,10 +1,20 @@
 package shared
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
+	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -275,6 +285,213 @@ func (s *NATSSuite) TestReconnect() {
 	)
 }
 
+// mTLS Tests
+
+func (s *NATSSuite) TestGetTLSConfig_NoMTLS() {
+	options := &NATSOptions{
+		URL:      "nats://localhost:4222",
+		User:     "user",
+		Password: "pass",
+	}
+
+	tlsConfig, err := getTLSConfig(options)
+	s.Require().NoError(err)
+	s.Require().Nil(tlsConfig)
+}
+
+func (s *NATSSuite) TestGetTLSConfig_WithMTLS() {
+	tempDir, err := os.MkdirTemp("", "nats-mtls-test-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	certPaths, err := generateAllCertificates(tempDir)
+	s.Require().NoError(err)
+
+	options := &NATSOptions{
+		URL:                      "nats://localhost:4222",
+		ClientCertificateFile:    certPaths.ClientCertFile,
+		ClientCertificateKeyFile: certPaths.ClientKeyFile,
+		CABundleFile:             certPaths.CAFile,
+	}
+
+	tlsConfig, err := getTLSConfig(options)
+	s.Require().NoError(err)
+	s.Require().NotNil(tlsConfig)
+	s.Require().Equal(uint16(tls.VersionTLS12), tlsConfig.MinVersion)
+	s.Require().Equal(uint16(tls.VersionTLS13), tlsConfig.MaxVersion)
+	s.Require().NotEmpty(tlsConfig.Certificates)
+	s.Require().NotNil(tlsConfig.RootCAs)
+}
+
+func (s *NATSSuite) TestGetTLSConfig_InvalidCertFile() {
+	tempDir, err := os.MkdirTemp("", "nats-mtls-test-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	certPaths, err := generateAllCertificates(tempDir)
+	s.Require().NoError(err)
+
+	options := &NATSOptions{
+		URL:                      "nats://localhost:4222",
+		ClientCertificateFile:    "/nonexistent/cert.pem",
+		ClientCertificateKeyFile: certPaths.ClientKeyFile,
+		CABundleFile:             certPaths.CAFile,
+	}
+
+	tlsConfig, err := getTLSConfig(options)
+	s.Require().Error(err)
+	s.Require().Nil(tlsConfig)
+	s.Require().Contains(err.Error(), "failed to load client certificate")
+}
+
+func (s *NATSSuite) TestGetTLSConfig_InvalidCAFile() {
+	tempDir, err := os.MkdirTemp("", "nats-mtls-test-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	certPaths, err := generateAllCertificates(tempDir)
+	s.Require().NoError(err)
+
+	options := &NATSOptions{
+		URL:                      "nats://localhost:4222",
+		ClientCertificateFile:    certPaths.ClientCertFile,
+		ClientCertificateKeyFile: certPaths.ClientKeyFile,
+		CABundleFile:             "/nonexistent/ca.pem",
+	}
+
+	tlsConfig, err := getTLSConfig(options)
+	s.Require().Error(err)
+	s.Require().Nil(tlsConfig)
+	s.Require().Contains(err.Error(), "failed to read CA bundle file")
+}
+
+func (s *NATSSuite) TestGetTLSConfig_PartialConfig_OnlyCA() {
+	tempDir, err := os.MkdirTemp("", "nats-mtls-test-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	certPaths, err := generateAllCertificates(tempDir)
+	s.Require().NoError(err)
+
+	options := &NATSOptions{
+		URL:          "nats://localhost:4222",
+		CABundleFile: certPaths.CAFile,
+	}
+
+	tlsConfig, err := getTLSConfig(options)
+	s.Require().Error(err)
+	s.Require().Nil(tlsConfig)
+	s.Require().Contains(err.Error(), "incomplete mTLS configuration")
+}
+
+func (s *NATSSuite) TestGetTLSConfig_PartialConfig_CertAndKey() {
+	tempDir, err := os.MkdirTemp("", "nats-mtls-test-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	certPaths, err := generateAllCertificates(tempDir)
+	s.Require().NoError(err)
+
+	options := &NATSOptions{
+		URL:                      "nats://localhost:4222",
+		ClientCertificateFile:    certPaths.ClientCertFile,
+		ClientCertificateKeyFile: certPaths.ClientKeyFile,
+	}
+
+	tlsConfig, err := getTLSConfig(options)
+	s.Require().Error(err)
+	s.Require().Nil(tlsConfig)
+	s.Require().Contains(err.Error(), "incomplete mTLS configuration")
+}
+
+func (s *NATSSuite) TestConnectWithMTLS_Success() {
+	tempDir, err := os.MkdirTemp("", "nats-mtls-test-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	certPaths, err := generateAllCertificates(tempDir)
+	s.Require().NoError(err)
+
+	serverInfo, err := startMTLSNATSServerWithCerts(certPaths.ServerCertFile, certPaths.ServerKeyFile, certPaths.CAFile, s.timeout)
+	s.Require().NoError(err)
+	defer serverInfo.Server.Shutdown()
+	defer serverInfo.Client.Close()
+
+	addressIdentifiers := []AddressIdentifier{
+		{Protocol: "ethereum", Network: "mainnet", Address: "0x1234567890123456789012345678901234567890"},
+	}
+
+	subscription, err := setupAddressListResponder(serverInfo.Client, addressIdentifiers, s.T().Logf)
+	s.Require().NoError(err)
+	defer subscription.Unsubscribe()
+
+	s.resetPackageVariables()
+
+	options := &NATSOptions{
+		URL:                      serverInfo.URL,
+		ClientCertificateFile:    certPaths.ClientCertFile,
+		ClientCertificateKeyFile: certPaths.ClientKeyFile,
+		CABundleFile:             certPaths.CAFile,
+	}
+
+	addressHandler := func(address common.Address) error {
+		s.lock.Lock()
+		defer s.lock.Unlock()
+		s.addresses = append(s.addresses, address)
+		return nil
+	}
+
+	contractAddressHandler := func(address common.Address) error {
+		s.lock.Lock()
+		defer s.lock.Unlock()
+		s.contractAddresses = append(s.contractAddresses, address)
+		return nil
+	}
+
+	err = InitNATS(s.Suite.T().Context(), options, addressHandler, contractAddressHandler)
+	s.Require().NoError(err)
+
+	s.waitForCondition(func() bool {
+		return isNATSConnected() && hasNATSSubscription()
+	}, "should connect with mTLS")
+
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	s.Require().Len(s.addresses, 1)
+	s.Require().Len(s.contractAddresses, 1)
+}
+
+func (s *NATSSuite) TestConnectWithMTLS_InvalidCertificate() {
+	tempDir, err := os.MkdirTemp("", "nats-mtls-test-*")
+	s.Require().NoError(err)
+	defer os.RemoveAll(tempDir)
+
+	certPaths, err := generateAllCertificates(tempDir)
+	s.Require().NoError(err)
+
+	serverInfo, err := startMTLSNATSServerWithCerts(certPaths.ServerCertFile, certPaths.ServerKeyFile, certPaths.CAFile, s.timeout)
+	s.Require().NoError(err)
+	defer serverInfo.Server.Shutdown()
+	defer serverInfo.Client.Close()
+
+	s.resetPackageVariables()
+
+	options := &NATSOptions{
+		URL:                      serverInfo.URL,
+		ClientCertificateFile:    certPaths.InvalidCertFile,
+		ClientCertificateKeyFile: certPaths.InvalidKeyFile,
+		CABundleFile:             certPaths.CAFile,
+	}
+
+	err = InitNATS(
+		s.Suite.T().Context(),
+		options,
+		func(_ common.Address) error { return nil },
+		func(_ common.Address) error { return nil },
+	)
+	s.Require().Error(err)
+}
+
 // SetupSuite runs once before all tests in the suite
 func (s *NATSSuite) SetupSuite() {
 	s.timeout = 5 * time.Second
@@ -420,4 +637,291 @@ func hasNATSSubscription() bool {
 		return false
 	}
 	return subscription.IsValid()
+}
+
+// Standalone helper functions for mTLS tests
+
+// CertificatePaths contains file paths for generated certificates
+type CertificatePaths struct {
+	CAFile          string
+	ServerCertFile  string
+	ServerKeyFile   string
+	ClientCertFile  string
+	ClientKeyFile   string
+	InvalidCertFile string
+	InvalidKeyFile  string
+}
+
+// NATSServerInfo contains information about a started NATS server
+type NATSServerInfo struct {
+	Server  *server.Server
+	Options *server.Options
+	URL     string
+	Client  *nats.Conn
+}
+
+// generateAllCertificates generates all certificates needed for mTLS testing
+func generateAllCertificates(tempDir string) (CertificatePaths, error) {
+	// Generate CA
+	caKey, caCert, err := generateCA()
+	if err != nil {
+		return CertificatePaths{}, fmt.Errorf("failed to generate CA: %w", err)
+	}
+
+	caCertFile := filepath.Join(tempDir, "ca-cert.pem")
+	if err := writeCert(tempDir, "ca-cert.pem", caCert); err != nil {
+		return CertificatePaths{}, fmt.Errorf("failed to write CA cert: %w", err)
+	}
+
+	// Generate server certificate
+	serverKey, serverCert, err := generateCert(caKey, caCert, "server", []string{"localhost", "127.0.0.1"})
+	if err != nil {
+		return CertificatePaths{}, fmt.Errorf("failed to generate server cert: %w", err)
+	}
+
+	serverCertFile := filepath.Join(tempDir, "server-cert.pem")
+	serverKeyFile := filepath.Join(tempDir, "server-key.pem")
+	if err := writeCert(tempDir, "server-cert.pem", serverCert); err != nil {
+		return CertificatePaths{}, fmt.Errorf("failed to write server cert: %w", err)
+	}
+	if err := writeKey(tempDir, "server-key.pem", serverKey); err != nil {
+		return CertificatePaths{}, fmt.Errorf("failed to write server key: %w", err)
+	}
+
+	// Generate client certificate
+	clientKey, clientCert, err := generateCert(caKey, caCert, "client", nil)
+	if err != nil {
+		return CertificatePaths{}, fmt.Errorf("failed to generate client cert: %w", err)
+	}
+
+	clientCertFile := filepath.Join(tempDir, "client-cert.pem")
+	clientKeyFile := filepath.Join(tempDir, "client-key.pem")
+	if err := writeCert(tempDir, "client-cert.pem", clientCert); err != nil {
+		return CertificatePaths{}, fmt.Errorf("failed to write client cert: %w", err)
+	}
+	if err := writeKey(tempDir, "client-key.pem", clientKey); err != nil {
+		return CertificatePaths{}, fmt.Errorf("failed to write client key: %w", err)
+	}
+
+	// Generate invalid certificate (self-signed, not signed by CA)
+	invalidKey, invalidCert, err := generateCA()
+	if err != nil {
+		return CertificatePaths{}, fmt.Errorf("failed to generate invalid cert: %w", err)
+	}
+
+	invalidCertFile := filepath.Join(tempDir, "invalid-cert.pem")
+	invalidKeyFile := filepath.Join(tempDir, "invalid-key.pem")
+	if err := writeCert(tempDir, "invalid-cert.pem", invalidCert); err != nil {
+		return CertificatePaths{}, fmt.Errorf("failed to write invalid cert: %w", err)
+	}
+	if err := writeKey(tempDir, "invalid-key.pem", invalidKey); err != nil {
+		return CertificatePaths{}, fmt.Errorf("failed to write invalid key: %w", err)
+	}
+
+	return CertificatePaths{
+		CAFile:          caCertFile,
+		ServerCertFile:  serverCertFile,
+		ServerKeyFile:   serverKeyFile,
+		ClientCertFile:  clientCertFile,
+		ClientKeyFile:   clientKeyFile,
+		InvalidCertFile: invalidCertFile,
+		InvalidKeyFile:  invalidKeyFile,
+	}, nil
+}
+
+// generateCA generates a CA certificate and private key
+func generateCA() (*ecdsa.PrivateKey, *x509.Certificate, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to generate key: %w", err)
+	}
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization: []string{"Test CA"},
+			CommonName:   "Test CA",
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+
+	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create certificate: %w", err)
+	}
+
+	cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse certificate: %w", err)
+	}
+
+	return key, cert, nil
+}
+
+// generateCert generates a certificate signed by the CA
+func generateCert(caKey *ecdsa.PrivateKey, caCert *x509.Certificate, commonName string, dnsNames []string) (*ecdsa.PrivateKey, *x509.Certificate, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to generate key: %w", err)
+	}
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject: pkix.Name{
+			Organization: []string{"Test Org"},
+			CommonName:   commonName,
+		},
+		NotBefore:   time.Now(),
+		NotAfter:    time.Now().Add(24 * time.Hour),
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		DNSNames:    dnsNames,
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+	}
+
+	certBytes, err := x509.CreateCertificate(rand.Reader, template, caCert, &key.PublicKey, caKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create certificate: %w", err)
+	}
+
+	cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse certificate: %w", err)
+	}
+
+	return key, cert, nil
+}
+
+// writeCert writes a certificate to a PEM file
+func writeCert(dir, filename string, cert *x509.Certificate) error {
+	certFile := filepath.Join(dir, filename)
+	certOut, err := os.Create(certFile)
+	if err != nil {
+		return fmt.Errorf("failed to create file: %w", err)
+	}
+	defer certOut.Close()
+
+	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}); err != nil {
+		return fmt.Errorf("failed to encode PEM: %w", err)
+	}
+
+	return nil
+}
+
+// writeKey writes a private key to a PEM file
+func writeKey(dir, filename string, key *ecdsa.PrivateKey) error {
+	keyFile := filepath.Join(dir, filename)
+	keyOut, err := os.Create(keyFile)
+	if err != nil {
+		return fmt.Errorf("failed to create file: %w", err)
+	}
+	defer keyOut.Close()
+
+	keyBytes, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return fmt.Errorf("failed to marshal key: %w", err)
+	}
+
+	if err := pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes}); err != nil {
+		return fmt.Errorf("failed to encode PEM: %w", err)
+	}
+
+	return nil
+}
+
+// startMTLSNATSServerWithCerts starts a NATS server configured with mTLS
+func startMTLSNATSServerWithCerts(serverCertFile, serverKeyFile, caCertFile string, timeout time.Duration) (NATSServerInfo, error) {
+	// Create TLS config for server
+	cert, err := tls.LoadX509KeyPair(serverCertFile, serverKeyFile)
+	if err != nil {
+		return NATSServerInfo{}, fmt.Errorf("failed to load key pair: %w", err)
+	}
+
+	caPool := x509.NewCertPool()
+	caCertBytes, err := os.ReadFile(caCertFile)
+	if err != nil {
+		return NATSServerInfo{}, fmt.Errorf("failed to read CA file: %w", err)
+	}
+	caPool.AppendCertsFromPEM(caCertBytes)
+
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    caPool,
+		MinVersion:   tls.VersionTLS12,
+	}
+
+	natsServerOptions := &server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1, // random port
+		NoLog:     true,
+		NoSigs:    true,
+		TLSConfig: tlsConfig,
+	}
+
+	natsServer, err := server.NewServer(natsServerOptions)
+	if err != nil {
+		return NATSServerInfo{}, fmt.Errorf("failed to create NATS server: %w", err)
+	}
+
+	go natsServer.Start()
+
+	if !natsServer.ReadyForConnections(timeout) {
+		return NATSServerInfo{}, fmt.Errorf("NATS server not ready within timeout")
+	}
+
+	natsServerURL := "nats://" + natsServer.Addr().String()
+
+	// Create mTLS client for mock responder
+	clientTLSConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      caPool,
+		MinVersion:   tls.VersionTLS12,
+	}
+
+	natsClient, err := nats.Connect(
+		natsServerURL,
+		nats.Secure(clientTLSConfig),
+		nats.MaxReconnects(-1),
+	)
+	if err != nil {
+		natsServer.Shutdown()
+		return NATSServerInfo{}, fmt.Errorf("failed to connect NATS client: %w", err)
+	}
+
+	return NATSServerInfo{
+		Server:  natsServer,
+		Options: natsServerOptions,
+		URL:     natsServerURL,
+		Client:  natsClient,
+	}, nil
+}
+
+// setupAddressListResponder sets up a NATS subscription to respond to address list requests
+func setupAddressListResponder(natsClient *nats.Conn, addresses []AddressIdentifier, logger func(format string, args ...interface{})) (*nats.Subscription, error) {
+	natsSubscription, err := natsClient.Subscribe(
+		SubjectAddressListRequest,
+		func(msg *nats.Msg) {
+			response, err := json.Marshal(addresses)
+			if err != nil {
+				if logger != nil {
+					logger("Failed to marshal: %v", err)
+				}
+				return
+			}
+			if err := msg.Respond(response); err != nil {
+				if logger != nil {
+					logger("Failed to respond: %v", err)
+				}
+			}
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to subscribe: %w", err)
+	}
+	return natsSubscription, nil
 }
