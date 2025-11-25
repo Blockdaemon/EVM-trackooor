@@ -7,9 +7,12 @@ import (
 	"log"
 	"log/slog"
 	"math/big"
+	"net/http"
 	"os"
+	"strings"
 	"sync"
 
+	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -24,6 +27,21 @@ var ChainID *big.Int
 var RpcURL string
 var Verbose bool
 var Options TrackooorOptions
+
+// When enabled, event subscriptions will use dual topic filters to monitor any
+// ERC20 transfers where either the sender (topic1) or receiver (topic2)
+// matches one of the registered wallet addresses. This allows server-side
+// filtering by the node without specifying token contract addresses.
+var UseDualTransferWalletFilters bool
+
+// Pre-encoded wallet addresses as 32-byte topic hashes for filtering
+// (left-padded address bytes). Populated at runtime based on configured
+// monitored wallet addresses.
+var monitoredAddressHashes = mapset.NewSet[common.Hash]()
+
+// Channel to notify when a new wallet address is added for server-side
+// wallet-topic ERC20 Transfer subscriptions.
+var NewWalletTopicChan chan common.Address
 
 // JSON data
 var EventSigs map[string]interface{} // from data file, maps hex string to event abi
@@ -133,6 +151,12 @@ func init() {
 	// init maps
 	ERC20TokenInfos = make(map[common.Address]ERC20Info)
 	AddressTypeCache = make(map[common.Address]int)
+	NewWalletTopicChan = make(chan common.Address, 1024)
+}
+
+// MonitoredAddressHashes returns the thread-safe set of monitored address hashes.
+func MonitoredAddressHashes() mapset.Set[common.Hash] {
+	return monitoredAddressHashes
 }
 
 func Infof(logger *slog.Logger, format string, args ...any) {
@@ -149,11 +173,29 @@ func TimeLogger(whichController string) *log.Logger {
 
 func ConnectToRPC(rpcURL string) (*ethclient.Client, *big.Int) {
 	Infof(slog.Default(), "Connecting to RPC URL...\n")
-	// client, err := ethclient.Dial(rpcURL)
+	// Build dial options and include optional HTTP/WebSocket headers from env
+	var clientOptions []rpc.ClientOption
+	clientOptions = append(clientOptions, rpc.WithWebsocketMessageSizeLimit(0))
+
+	// Support explicit key/value envs first, fallback to legacy RPC_HEADER="Key:Value"
+	{
+		var hdr http.Header
+		if key, val := os.Getenv("RPC_HEADER_KEY"), os.Getenv("RPC_HEADER_VALUE"); key != "" && val != "" {
+			hdr = http.Header{}
+			hdr.Add(strings.TrimSpace(key), strings.TrimSpace(val))
+		}
+		if hdr != nil {
+			clientOptions = append(clientOptions, rpc.WithHeaders(hdr))
+			for k := range hdr {
+				Infof(slog.Default(), "Applied RPC header '%s' from environment\n", k)
+			}
+		}
+	}
+
 	RpcClient, err := rpc.DialOptions(
 		context.Background(),
 		rpcURL,
-		rpc.WithWebsocketMessageSizeLimit(0), // no limit
+		clientOptions...,
 	)
 	client := ethclient.NewClient(RpcClient)
 

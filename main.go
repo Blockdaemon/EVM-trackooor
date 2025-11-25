@@ -142,7 +142,6 @@ var realtimeBlocksCmd = &cobra.Command{
 			ctx,
 			&options.NATS,
 			actions.AddAddressToMonitoredAddresses,
-			actions.AddContractAddressToMonitoredAddresses,
 		); err != nil {
 			return fmt.Errorf("Failed to initialize NATS client: %w", err)
 		}
@@ -186,9 +185,8 @@ var historicalCmd = &cobra.Command{
 			ctx,
 			&options.NATS,
 			actions.AddAddressToMonitoredAddresses,
-			actions.AddContractAddressToMonitoredAddresses,
 		); err != nil {
-			log.Fatalf("failed to initialize NATS client: %v", err)
+			shared.Warnf(slog.Default(), "Failed to initialize NATS client for historical: %v", err)
 		}
 
 		if shared.BlockTrackingRequired {
@@ -221,9 +219,8 @@ var historicalEventsCmd = &cobra.Command{
 			ctx,
 			&options.NATS,
 			actions.AddAddressToMonitoredAddresses,
-			actions.AddContractAddressToMonitoredAddresses,
 		); err != nil {
-			log.Fatalf("failed to initialize NATS client: %v", err)
+			shared.Warnf(slog.Default(), "Failed to initialize NATS client for historical events: %v", err)
 		}
 
 		trackooor.GetPastEventsSingle()
@@ -252,9 +249,8 @@ var historicalBlocksCmd = &cobra.Command{
 			ctx,
 			&options.NATS,
 			actions.AddAddressToMonitoredAddresses,
-			actions.AddContractAddressToMonitoredAddresses,
 		); err != nil {
-			log.Fatalf("failed to initialize NATS client: %v", err)
+			shared.Warnf(slog.Default(), "Failed to initialize NATS client for historical blocks: %v", err)
 		}
 
 		trackooor.GetPastBlocks()

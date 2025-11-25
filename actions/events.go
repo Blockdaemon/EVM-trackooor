@@ -21,15 +21,6 @@ const (
 	StatusFailure           = "failed"
 )
 
-var networkMap = map[string]string{
-	"1":        "mainnet",
-	"5":        "goerli",
-	"2026":     "lower-qa",
-	"2025":     "higher-prod",
-	"17069":    "holesky",
-	"11155111": "sepolia",
-}
-
 func (txData *ActionTxData) ToDestinationBalance(balance *big.Int) webhook.WebhookMessageUnifiedConfirmedBalanceRequest {
 	return txData.toBalance(txData.To, balance)
 }
@@ -100,8 +91,8 @@ func (txData *ActionTxData) ToTransaction() webhook.WebhookMessageUnifiedConfirm
 			TxId:        txHash,
 		},
 		EventType: EventTypeTransaction,
-		Network:   networkName(shared.ChainID),
-		Protocol:  ProtocolEthereum,
+		Network:   "",
+		Protocol:  "",
 	}
 }
 
@@ -119,8 +110,8 @@ func (txData *ActionTxData) toBalance(address *common.Address, balance *big.Int)
 		ChainId:   prefixedChainIDString(shared.ChainID),
 		Data:      balanceData,
 		EventType: EventTypeBalance,
-		Network:   networkName(shared.ChainID),
-		Protocol:  ProtocolEthereum,
+		Network:   "",
+		Protocol:  "",
 	}
 }
 
@@ -189,8 +180,8 @@ func (eventData *ActionEventData) ToTransactionLog() webhook.WebhookMessageUnifi
 			TxId:        txHash,
 		},
 		EventType: EventTypeTransactionLog,
-		Network:   networkName(shared.ChainID),
-		Protocol:  ProtocolEthereum,
+		Network:   "",
+		Protocol:  "",
 	}
 }
 
@@ -211,17 +202,9 @@ func (eventData *ActionEventData) toBalance(address *common.Address, balance *bi
 		ChainId:   prefixedChainIDString(shared.ChainID),
 		Data:      balanceData,
 		EventType: EventTypeBalance,
-		Network:   networkName(shared.ChainID),
-		Protocol:  ProtocolEthereum,
+		Network:   "",
+		Protocol:  "",
 	}
-}
-
-func networkName(chainID *big.Int) string {
-	name, ok := networkMap[chainID.String()]
-	if !ok {
-		return ""
-	}
-	return name
 }
 
 func prefixedChainIDString(chainID *big.Int) string {
