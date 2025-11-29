@@ -7,7 +7,7 @@ RUN apk add --no-cache git build-base
 # Set working directory
 WORKDIR /app
 
-ENV GOPRIVATE=gitlab.com/blockdaemon,go.blockdaemon.com/blockdaemon,gitlab.com/Blockdaemon,go.blockdaemon.com
+ENV GOPRIVATE=gitlab.com/blockdaemon,go.blockdaemon.com/blockdaemon,gitlab.com/Blockdaemon,go.Blockdaemon.com
 
 # Copy go mod files
 COPY go.mod go.sum ./
