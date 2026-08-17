@@ -81,6 +81,12 @@ type TrackooorOptions struct {
 
 	IsL2Chain bool // will account for invalid tx types
 
+	// Optional custom RPC HTTP/WebSocket header (e.g. X-Auth-Token).
+	// Loaded from config.json keys "rpcheaderkey" / "rpcheadervalue".
+	// Overridden by RPC_HEADER_KEY / RPC_HEADER_VALUE env vars when both are set.
+	RpcHeaderKey   string
+	RpcHeaderValue string
+
 	NATS NATSOptions
 }
 
@@ -171,25 +177,29 @@ func TimeLogger(whichController string) *log.Logger {
 	return log.New(os.Stderr, whichController, log.Lmsgprefix|log.LstdFlags)
 }
 
+// resolveRPCHeader returns an optional custom RPC request header.
+// Priority: RPC_HEADER_KEY + RPC_HEADER_VALUE env vars, then config.json
+// fields on Options (rpcheaderkey / rpcheadervalue).
+func resolveRPCHeader() (key, value, source string) {
+	if envKey, envVal := os.Getenv("RPC_HEADER_KEY"), os.Getenv("RPC_HEADER_VALUE"); envKey != "" && envVal != "" {
+		return strings.TrimSpace(envKey), strings.TrimSpace(envVal), "environment"
+	}
+	if Options.RpcHeaderKey != "" && Options.RpcHeaderValue != "" {
+		return strings.TrimSpace(Options.RpcHeaderKey), strings.TrimSpace(Options.RpcHeaderValue), "config"
+	}
+	return "", "", ""
+}
+
 func ConnectToRPC(rpcURL string) (*ethclient.Client, *big.Int) {
 	Infof(slog.Default(), "Connecting to RPC URL...\n")
-	// Build dial options and include optional HTTP/WebSocket headers from env
 	var clientOptions []rpc.ClientOption
 	clientOptions = append(clientOptions, rpc.WithWebsocketMessageSizeLimit(0))
 
-	// Support explicit key/value envs first, fallback to legacy RPC_HEADER="Key:Value"
-	{
-		var hdr http.Header
-		if key, val := os.Getenv("RPC_HEADER_KEY"), os.Getenv("RPC_HEADER_VALUE"); key != "" && val != "" {
-			hdr = http.Header{}
-			hdr.Add(strings.TrimSpace(key), strings.TrimSpace(val))
-		}
-		if hdr != nil {
-			clientOptions = append(clientOptions, rpc.WithHeaders(hdr))
-			for k := range hdr {
-				Infof(slog.Default(), "Applied RPC header '%s' from environment\n", k)
-			}
-		}
+	if key, val, source := resolveRPCHeader(); key != "" && val != "" {
+		hdr := http.Header{}
+		hdr.Add(key, val)
+		clientOptions = append(clientOptions, rpc.WithHeaders(hdr))
+		Infof(slog.Default(), "Applied RPC header '%s' from %s\n", key, source)
 	}
 
 	RpcClient, err := rpc.DialOptions(

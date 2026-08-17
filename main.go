@@ -464,6 +464,19 @@ func loadConfigFile(filename string) {
 		log.Fatalf("Missing RPC URL in config file %v", filename)
 	}
 
+	// Optional custom RPC header (e.g. X-Auth-Token). Prefer lowercase keys
+	// to match "rpcurl"; accept camelCase aliases. Env RPC_HEADER_* overrides.
+	if v, ok := configOptions["rpcheaderkey"]; ok {
+		options.RpcHeaderKey = fmt.Sprint(v)
+	} else if v, ok := configOptions["rpcHeaderKey"]; ok {
+		options.RpcHeaderKey = fmt.Sprint(v)
+	}
+	if v, ok := configOptions["rpcheadervalue"]; ok {
+		options.RpcHeaderValue = fmt.Sprint(v)
+	} else if v, ok := configOptions["rpcHeaderValue"]; ok {
+		options.RpcHeaderValue = fmt.Sprint(v)
+	}
+
 	if v, ok := configOptions["nats"]; ok {
 		var natsOptions shared.NATSOptions
 
