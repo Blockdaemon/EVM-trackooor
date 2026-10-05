@@ -136,6 +136,13 @@ var realtimeBlocksCmd = &cobra.Command{
 
 		actions.InitActions(options.Actions)
 
+		// Bind /livez before the address-list request. InitNATS blocks until
+		// the wallet replies, and a delayed reply would fail the liveness probe.
+		if healthCheckPort != "" {
+			healthServer := utils.NewHealthServer(healthCheckPort)
+			healthServer.Start()
+		}
+
 		ctx := cmd.Context()
 
 		if err := shared.InitNATS(
@@ -144,12 +151,6 @@ var realtimeBlocksCmd = &cobra.Command{
 			actions.AddAddressToMonitoredAddresses,
 		); err != nil {
 			return fmt.Errorf("Failed to initialize NATS client: %w", err)
-		}
-
-		// Start health check server if port is specified
-		if healthCheckPort != "" {
-			healthServer := utils.NewHealthServer(healthCheckPort)
-			healthServer.Start()
 		}
 
 		if PendingBlocks {
