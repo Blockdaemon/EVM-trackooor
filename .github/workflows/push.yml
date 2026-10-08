@@ -1,5 +1,9 @@
 name: Build and push image
 
+# Version tags are what mothership docker-deps.yml pins. Tag nats (vX.Y.Z),
+# then bump evm-tracker in mothership. That mothership PR runs sandbox e2e.
+# The floating nats tag stays for the branch; do not pin it from mothership.
+
 on:
   push:
     branches: [ nats ]
@@ -17,19 +21,28 @@ jobs:
         uses: actions/checkout@v4
       - name: configure aws
         uses: Blockdaemon/aws-configure-credentials@v1
+      - name: Set up QEMU
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: login to ecr
         uses: blockdaemon/ecr-login@v1
-      - name: Build and push walletconnect
+      - name: Build and push evm-tracker
         uses: docker/build-push-action@v6
         env:
           CACHE_TO: type=registry,mode=max,image-manifest=true,oci-mediatypes=true,ref=190367695196.dkr.ecr.us-east-1.amazonaws.com/blockdaemon/evm-tracker:cache
         with:
           push: true
+          platforms: ${{ startsWith(github.ref, 'refs/tags/') && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          # Attestations pile onto one subject and ECR caps referrers at 100.
+          provenance: false
           tags: |
             190367695196.dkr.ecr.us-east-1.amazonaws.com/blockdaemon/evm-tracker:${{ github.ref_name }}
             352033354486.dkr.ecr.us-east-1.amazonaws.com/blockdaemon/evm-tracker:${{ github.ref_name }}
             638663786504.dkr.ecr.us-east-1.amazonaws.com/blockdaemon/evm-tracker:${{ github.ref_name }}
-          cache-from: type=registry,type=registry,ref=190367695196.dkr.ecr.us-east-1.amazonaws.com/blockdaemon/evm-tracker:cache
-          cache-to: type=registry,mode=max,image-manifest=true,oci-mediatypes=true,ref=190367695196.dkr.ecr.us-east-1.amazonaws.com/blockdaemon/evm-tracker:cache
+          cache-from: type=registry,ref=190367695196.dkr.ecr.us-east-1.amazonaws.com/blockdaemon/evm-tracker:cache
+          cache-to: ${{ env.CACHE_TO }}
+          secrets: |
+            gitlab_username=gitlab-ci-token
+            gitlab_token=${{ secrets.GITLAB_READ_TOKEN }}

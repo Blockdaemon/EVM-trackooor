@@ -19,6 +19,7 @@ A modular tool to track and process anything on an EVM chain, including events, 
   - [Adding function signature data](#adding-function-signature-data)
 - [Supported Chains](#supported-chains)
 - [Contributions and Support](#contributions-and-support)
+- [Releasing the wallet image](#releasing-the-wallet-image)
 
 # Examples
 
@@ -525,3 +526,13 @@ This starts a HTTP server on the specified port with the following endpoints:
 - `/readyz` - Kubernetes readiness probe (checks RPC connection)
 
 For more details on deploying to Kubernetes, see the [Kubernetes Deployment Guide](docs/kubernetes.md).
+
+# Releasing the wallet image
+
+Mothership does not build this image. It pins `evm-tracker` in `docker-deps.yml`.
+
+1. Merge the publish workflow to `nats`.
+2. Tag that commit `vX.Y.Z`. This workflow pushes `blockdaemon/evm-tracker:vX.Y.Z` to dev, staging, and prod ECR. Tag builds are multi-arch and need `GITLAB_READ_TOKEN` for private modules.
+3. Bump `evm-tracker:` in mothership `docker-deps.yml`. That pull request is the integration test: sandbox e2e pulls the pin.
+
+`v0.2.0` is the first pin, for `nats` at `353510f`. The branch tag `nats` keeps moving, so mothership does not pin it.
