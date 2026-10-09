@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build-and-push:
-    runs-on: kube-dind
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
